@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import glob
+import os
 
 st.set_page_config(
     page_title="Solar & BESS Market Dashboard",
@@ -8,71 +10,18 @@ st.set_page_config(
     layout="wide"
 )
 
-# ── Google Fonts + Global CSS ──────────────────────────────────────────────────
 st.markdown("""
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Monda:wght@700&display=swap" rel="stylesheet">
 <style>
-    /* Base font */
     html, body, [class*="css"], .stApp {
         font-family: 'Inter', sans-serif;
         background-color: #f4f6fb;
     }
-
-    /* All headers use Monda bold */
     h1, h2, h3, h4, h5, h6 {
         font-family: 'Monda', sans-serif !important;
         font-weight: 700 !important;
         color: #0058C2 !important;
     }
-
-    /* Fixed top nav bar */
-    .top-nav {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        z-index: 9999;
-        background: #0058C2;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 0 24px;
-        height: 52px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-    }
-    .top-nav .brand {
-        font-family: 'Monda', sans-serif;
-        font-weight: 700;
-        font-size: 16px;
-        color: white;
-        margin-right: 24px;
-        white-space: nowrap;
-    }
-    .top-nav a {
-        font-family: 'Inter', sans-serif;
-        font-size: 14px;
-        font-weight: 500;
-        color: rgba(255,255,255,0.75);
-        text-decoration: none;
-        padding: 6px 14px;
-        border-radius: 6px;
-        transition: background 0.15s;
-        cursor: pointer;
-        border: none;
-        background: none;
-        white-space: nowrap;
-    }
-    .top-nav a.active, .top-nav a:hover {
-        background: rgba(255,255,255,0.15);
-        color: white;
-    }
-
-    /* Push content below fixed nav */
-    .main .block-container {
-        padding-top: 72px !important;
-    }
-
-    /* Metric cards */
     .metric-card {
         background: white;
         border-radius: 10px;
@@ -80,6 +29,7 @@ st.markdown("""
         box-shadow: 0 1px 4px rgba(0,0,0,0.07);
         text-align: center;
         border-top: 3px solid #0058C2;
+        margin-bottom: 8px;
     }
     .metric-label {
         font-family: 'Inter', sans-serif;
@@ -102,41 +52,38 @@ st.markdown("""
         color: #9ca3af;
         margin-top: 2px;
     }
-
-    /* Sidebar */
     section[data-testid="stSidebar"] {
         background: #ffffff;
         border-right: 1px solid #e5e7eb;
     }
-    section[data-testid="stSidebar"] .stMarkdown h2 {
-        font-family: 'Monda', sans-serif !important;
-        font-size: 15px !important;
+    /* Style the tab bar to match brand */
+    div[data-testid="stTabs"] button {
+        font-family: 'Inter', sans-serif !important;
+        font-weight: 600 !important;
+        font-size: 14px !important;
+        color: #0058C2 !important;
+        background: white !important;
+        border-radius: 6px 6px 0 0 !important;
     }
-
-    /* Hide default streamlit radio for page nav (we use query params) */
-    div[data-testid="stRadio"] { display: none; }
-
-    /* Plotly chart border */
-    .js-plotly-plot {
-        border-radius: 8px;
-        background: white;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    div[data-testid="stTabs"] button[aria-selected="true"] {
+        background: #FFC000 !important;
+        color: white !important;
+        border-bottom: 2px solid #FFC000 !important;
+    }
+    div[data-testid="stTabs"] button:hover {
+        background: #fff3cc !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Color palette ──────────────────────────────────────────────────────────────
 BLUE_DARK = "#0058C2"
 BLUE_LIGHT = "#0074FF"
 AMBER = "#FFC000"
 CHART_COLORS = [BLUE_DARK, BLUE_LIGHT, AMBER, "#93c5fd", "#fde68a"]
 
 TECHNOLOGIES = ["Solar Photovoltaic", "Batteries"]
-
-# CHP sectors to exclude
 CHP_SECTORS = {"IPP CHP", "Industrial CHP", "Commercial CHP"}
 
-# Sector name cleanup (remove " Non-CHP")
 def clean_sector(s):
     if isinstance(s, str):
         return s.replace(" Non-CHP", "").replace(" CHP", "")
@@ -163,7 +110,6 @@ def process_file(file_bytes):
     import io
     f = io.BytesIO(file_bytes)
 
-    # Operating
     op = pd.read_excel(f, sheet_name="Operating", header=2)
     op = op[[c for c in OPERATING_KEEP if c in op.columns]].copy()
     op = op[op["Plant State"] != "PR"]
@@ -177,7 +123,6 @@ def process_file(file_bytes):
     })
     op["Status_Simple"] = "Operating"
 
-    # Planned
     f.seek(0)
     pl = pd.read_excel(f, sheet_name="Planned", header=2)
     pl = pl[[c for c in PLANNED_KEEP if c in pl.columns]].copy()
@@ -199,7 +144,6 @@ def process_file(file_bytes):
     for col in ["MWac", "MWdc", "MWh", "Latitude", "Longitude", "Operating Year"]:
         combined[col] = pd.to_numeric(combined[col], errors="coerce")
 
-    # Plant-level aggregation
     agg = combined.groupby(["Plant ID", "Technology"], as_index=False).agg(
         Total_MWac=("MWac", "sum"),
         Total_MWdc=("MWdc", "sum"),
@@ -240,8 +184,8 @@ def to_gw(series):
     return round(pd.to_numeric(series, errors="coerce").sum() / 1000, 1)
 
 
-def styled_bar(df_plot, x, y, title, color=None, color_map=None, orientation="v", text_col=None):
-    kwargs = dict(title=title, text=text_col or y,
+def styled_bar(df_plot, x, y, title, color=None, color_map=None, orientation="v"):
+    kwargs = dict(title=title, text=y,
                   color_discrete_sequence=CHART_COLORS if color is None else None)
     if color:
         kwargs["color"] = color
@@ -264,43 +208,32 @@ def styled_bar(df_plot, x, y, title, color=None, color_map=None, orientation="v"
     return fig
 
 
-# ── Page routing via query params ──────────────────────────────────────────────
-PAGES = ["Market Overview", "Solar Projects", "BESS Projects", "Project Map"]
-params = st.query_params
-page = params.get("page", "Market Overview")
-if page not in PAGES:
-    page = "Market Overview"
+# ── Find data file ─────────────────────────────────────────────────────────────
+def find_data_file():
+    matches = glob.glob("*generator*.xlsx") + glob.glob("*Generator*.xlsx")
+    if matches:
+        # Pick the most recently modified if multiple
+        return max(matches, key=os.path.getmtime)
+    return None
 
-nav_links = ""
-for p in PAGES:
-    active = "active" if p == page else ""
-    safe = p.replace(" ", "+")
-    nav_links += f'<a class="{active}" href="?page={safe}">{p}</a>'
+data_file = find_data_file()
 
-st.markdown(f"""
-<div class="top-nav">
-    <span class="brand">☀️ Solar & BESS Market</span>
-    {nav_links}
-</div>
-""", unsafe_allow_html=True)
+if data_file:
+    with open(data_file, "rb") as f:
+        df_raw = process_file(f.read())
+    data_loaded = True
+else:
+    data_loaded = False
 
 # ── Sidebar filters ────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## Filters")
 
-    DATA_FILE = "march_generator2026__1_.xlsx"
-    try:
-        with open(DATA_FILE, "rb") as f:
-            file_bytes = f.read()
-        df_raw = process_file(file_bytes)
-        data_loaded = True
-    except FileNotFoundError:
+    if not data_loaded:
         uploaded = st.file_uploader("Upload EIA 860M Excel file", type=["xlsx"])
         if uploaded:
             df_raw = process_file(uploaded.read())
             data_loaded = True
-        else:
-            data_loaded = False
 
     if data_loaded:
         tech_options = sorted(df_raw["Technology"].dropna().unique())
@@ -324,7 +257,7 @@ with st.sidebar:
 # ── No data ────────────────────────────────────────────────────────────────────
 if not data_loaded:
     st.title("Solar & BESS Market Dashboard")
-    st.info("Upload the EIA Form 860M Excel file using the sidebar to get started.")
+    st.info("No EIA data file found. Upload the EIA Form 860M Excel file using the sidebar.")
     st.stop()
 
 # ── Apply filters ──────────────────────────────────────────────────────────────
@@ -342,8 +275,16 @@ if selected_state != "All":
 if selected_sector != "All":
     df = df[df["Sector"] == selected_sector]
 
+# ── Navigation tabs ────────────────────────────────────────────────────────────
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊  Market Overview",
+    "☀️  Solar Projects",
+    "🔋  BESS Projects",
+    "🗺️  Project Map"
+])
+
 # ── Market Overview ────────────────────────────────────────────────────────────
-if page == "Market Overview":
+with tab1:
     st.title("Market Overview")
 
     solar = df[df["Technology"] == "Solar Photovoltaic"]
@@ -373,15 +314,16 @@ if page == "Market Overview":
         yr = df.groupby("Operating Year")["Total MWac"].sum().reset_index()
         yr["GWac"] = (yr["Total MWac"] / 1000).round(1)
         yr = yr[yr["Operating Year"].between(2015, 2035)]
-        st.plotly_chart(styled_bar(yr, "Operating Year", "GWac", "GWac by Operating Year"), use_container_width=True)
+        st.plotly_chart(styled_bar(yr, "Operating Year", "GWac", "GWac by Operating Year"),
+                        use_container_width=True)
 
     with cr:
         seg = df.groupby(["Segment", "Status"])["Total MWac"].sum().reset_index()
         seg["GWac"] = (seg["Total MWac"] / 1000).round(1)
-        fig2 = styled_bar(seg, "Segment", "GWac", "GWac by Segment and Status",
-                          color="Status",
-                          color_map={"Operating": BLUE_DARK, "Development": BLUE_LIGHT})
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(styled_bar(seg, "Segment", "GWac", "GWac by Segment and Status",
+                                   color="Status",
+                                   color_map={"Operating": BLUE_DARK, "Development": BLUE_LIGHT}),
+                        use_container_width=True)
 
     cl2, cr2 = st.columns(2)
 
@@ -389,19 +331,20 @@ if page == "Market Overview":
         st8 = df.groupby("Plant State")["Total MWac"].sum().reset_index()
         st8["GWac"] = (st8["Total MWac"] / 1000).round(1)
         st8 = st8.nlargest(15, "GWac").sort_values("GWac")
-        fig3 = styled_bar(st8, "GWac", "Plant State", "Top 15 States by GWac", orientation="h")
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(styled_bar(st8, "GWac", "Plant State", "Top 15 States by GWac",
+                                   orientation="h"),
+                        use_container_width=True)
 
     with cr2:
         ts = df.groupby(["Technology", "Segment"])["Total MWac"].sum().reset_index()
         ts["GWac"] = (ts["Total MWac"] / 1000).round(1)
-        fig4 = styled_bar(ts, "Technology", "GWac", "GWac by Technology and Segment",
-                          color="Segment",
-                          color_map={"Utility": BLUE_DARK, "DG": AMBER})
-        st.plotly_chart(fig4, use_container_width=True)
+        st.plotly_chart(styled_bar(ts, "Technology", "GWac", "GWac by Technology and Segment",
+                                   color="Segment",
+                                   color_map={"Utility": BLUE_DARK, "DG": AMBER}),
+                        use_container_width=True)
 
 # ── Solar Projects ─────────────────────────────────────────────────────────────
-elif page == "Solar Projects":
+with tab2:
     st.title("Solar Project List")
     d = df[df["Technology"] == "Solar Photovoltaic"].copy()
     cols = ["Plant Name", "Owner", "Plant State", "County", "Sector", "Segment",
@@ -412,7 +355,7 @@ elif page == "Solar Projects":
     st.dataframe(d, use_container_width=True, height=650)
 
 # ── BESS Projects ──────────────────────────────────────────────────────────────
-elif page == "BESS Projects":
+with tab3:
     st.title("BESS Project List")
     d = df[df["Technology"] == "Batteries"].copy()
     cols = ["Plant Name", "Owner", "Plant State", "County", "Sector", "Segment",
@@ -423,7 +366,7 @@ elif page == "BESS Projects":
     st.dataframe(d, use_container_width=True, height=650)
 
 # ── Project Map ────────────────────────────────────────────────────────────────
-elif page == "Project Map":
+with tab4:
     st.title("Project Map")
     m = df.dropna(subset=["Latitude", "Longitude", "Total MWac"]).copy()
     m = m[(m["Latitude"].between(24, 50)) & (m["Longitude"].between(-125, -66))]
