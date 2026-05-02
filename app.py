@@ -22,6 +22,10 @@ st.markdown("""
         font-weight: 700 !important;
         color: #0058C2 !important;
     }
+    h1 {
+        font-size: 2.4rem !important;
+        margin-bottom: 0.5rem !important;
+    }
     .metric-card {
         background: white;
         border-radius: 10px;
@@ -194,7 +198,7 @@ def process_file(file_bytes):
 
     meta_cols = ["Plant ID", "Technology", "Plant Name", "Entity Name", "Entity ID",
                  "Plant State", "County", "Sector", "Operating Year", "Operating Month",
-                 "Status_Simple", "Latitude", "Longitude"]
+                 "Status_Simple", "Status", "Latitude", "Longitude"]
     meta_cols = [c for c in meta_cols if c in combined.columns]
     meta = combined[meta_cols].drop_duplicates(subset=["Plant ID", "Technology"], keep="first")
 
@@ -208,6 +212,8 @@ def process_file(file_bytes):
         return "DG"
 
     df["Segment"] = df.apply(segment, axis=1)
+    # Preserve original EIA status detail before overwriting with simplified version
+    df = df.rename(columns={"Status": "EIA Status"})
     df["Status"] = df["Status_Simple"]
     df["GWac"] = (df["Total_MWac"] / 1000).round(3)
     df["Operating Year"] = df["Operating Year"].astype("Int64")
@@ -549,24 +555,48 @@ with tab6:
 with tab7:
     st.title("Plant Search")
 
-    search_query = st.text_input("Search plant name", placeholder="e.g. Desert Sunlight, Gemini...")
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        search_name = st.text_input("Search by plant name", placeholder="e.g. Desert Sunlight, Gemini...")
+    with col_s2:
+        search_owner = st.text_input("Search by owner", placeholder="e.g. NextEra, Invenergy...")
 
-    if search_query:
-        results = df_raw[df_raw["Plant Name"].str.contains(search_query, case=False, na=False)].copy()
+    show_detail = False
+
+    if search_name or search_owner:
+        mask = pd.Series([True] * len(df_raw), index=df_raw.index)
+        if search_name:
+            mask = mask & df_raw["Plant Name"].str.contains(search_name, case=False, na=False)
+        if search_owner:
+            mask = mask & df_raw["Owner"].str.contains(search_owner, case=False, na=False)
+        results = df_raw[mask].copy()
 
         if len(results) == 0:
-            st.warning("No plants found matching that name.")
+            st.warning("No plants found matching that search.")
         else:
-            # If multiple matches show a selector
-            plant_names = sorted(results["Plant Name"].unique())
-            if len(plant_names) > 1:
-                selected_plant = st.selectbox(f"{len(plant_names)} plants found -- select one", plant_names)
+            # Owner-only search: show a summary table first
+            if search_owner and not search_name:
+                st.markdown(f"**{len(results):,} plants found for owner matching '{search_owner}'**")
+                owner_cols = ["Plant Name", "Owner", "State", "County", "Technology",
+                              "Segment", "Status", "Operating Year", "Total MWac", "Total MWh"]
+                owner_cols = [c for c in owner_cols if c in results.columns]
+                st.dataframe(
+                    results[owner_cols].sort_values("Total MWac", ascending=False).reset_index(drop=True),
+                    use_container_width=True, height=400
+                )
+                st.markdown("**Enter a plant name above to see full details and map for a specific plant.**")
             else:
-                selected_plant = plant_names[0]
+                show_detail = True
+                plant_names = sorted(results["Plant Name"].unique())
+                if len(plant_names) > 1:
+                    selected_plant = st.selectbox(f"{len(plant_names)} plants found -- select one", plant_names)
+                else:
+                    selected_plant = plant_names[0]
 
-            plant_rows = results[results["Plant Name"] == selected_plant]
-            row = plant_rows.iloc[0]
+                plant_rows = results[results["Plant Name"] == selected_plant]
+                row = plant_rows.iloc[0]
 
+    if show_detail:
             st.markdown("<br>", unsafe_allow_html=True)
 
             # Detail cards
@@ -589,6 +619,7 @@ with tab7:
                 details_html += detail_row("Sector", row.get("Sector", ""))
                 details_html += detail_row("Segment", row.get("Segment", ""))
                 details_html += detail_row("Status", row.get("Status", ""))
+                details_html += detail_row("EIA Status", row.get("EIA Status", ""))
                 details_html += detail_row("Operating Year", str(row.get("Operating Year", "")))
                 details_html += detail_row("Total MWac", f"{row.get('Total MWac', 0):,.1f}")
                 mwdc = row.get("Total MWdc", None)
@@ -613,22 +644,10 @@ with tab7:
             with col_right:
                 st.markdown("### Location")
                 if pd.notna(lat) and pd.notna(lon):
-                    # Satellite map via Google Maps embed (no API key needed for basic embed)
                     zoom_level = 14
                     google_maps_url = f"https://maps.google.com/maps?q={lat},{lon}&z={zoom_level}&output=embed&t=k"
-                    st.components.v1.iframe(google_maps_url, height=460)
-
-                    # Also show a small plotly marker map for context
-                    fig_single = px.scatter_mapbox(
-                        pd.DataFrame({"lat": [lat], "lon": [lon], "name": [selected_plant]}),
-                        lat="lat", lon="lon", hover_name="name",
-                        zoom=9, center={"lat": lat, "lon": lon},
-                        mapbox_style="open-street-map", height=200
-                    )
-                    fig_single.update_traces(marker=dict(size=14, color=AMBER))
-                    fig_single.update_layout(margin=dict(t=0, b=0, l=0, r=0))
-                    st.plotly_chart(fig_single, use_container_width=True)
+                    st.components.v1.iframe(google_maps_url, height=500)
                 else:
                     st.info("No coordinates available for this plant.")
     else:
-        st.markdown("Enter a plant name above to search. Partial matches are supported.")
+        st.markdown("Enter a plant name or owner above to search. Partial matches are supported.")
