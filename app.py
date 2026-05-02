@@ -56,22 +56,35 @@ st.markdown("""
         background: #ffffff;
         border-right: 1px solid #e5e7eb;
     }
-    /* Style the tab bar to match brand */
-    div[data-testid="stTabs"] button {
+
+    /* Tab styling */
+    div[data-testid="stTabs"] {
+        margin-bottom: 16px;
+    }
+    div[data-testid="stTabs"] [role="tablist"] {
+        gap: 4px;
+        border-bottom: 2px solid #e5e7eb;
+    }
+    div[data-testid="stTabs"] button[role="tab"] {
         font-family: 'Inter', sans-serif !important;
         font-weight: 600 !important;
-        font-size: 14px !important;
+        font-size: 16px !important;
+        color: #6c757d !important;
+        background: transparent !important;
+        border: none !important;
+        border-bottom: 3px solid transparent !important;
+        border-radius: 0 !important;
+        padding: 10px 20px !important;
+        margin-bottom: -2px !important;
+    }
+    div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
         color: #0058C2 !important;
-        background: white !important;
-        border-radius: 6px 6px 0 0 !important;
+        border-bottom: 3px solid #FFC000 !important;
+        background: transparent !important;
     }
-    div[data-testid="stTabs"] button[aria-selected="true"] {
-        background: #FFC000 !important;
-        color: white !important;
-        border-bottom: 2px solid #FFC000 !important;
-    }
-    div[data-testid="stTabs"] button:hover {
-        background: #fff3cc !important;
+    div[data-testid="stTabs"] button[role="tab"]:hover {
+        color: #0058C2 !important;
+        background: #f0f4ff !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -83,6 +96,8 @@ CHART_COLORS = [BLUE_DARK, BLUE_LIGHT, AMBER, "#93c5fd", "#fde68a"]
 
 TECHNOLOGIES = ["Solar Photovoltaic", "Batteries"]
 CHP_SECTORS = {"IPP CHP", "Industrial CHP", "Commercial CHP"}
+
+MIDWEST_STATES = ["IL", "IN", "IA", "KS", "MI", "MN", "MO", "NE", "ND", "OH", "SD", "WI"]
 
 def clean_sector(s):
     if isinstance(s, str):
@@ -170,6 +185,18 @@ def process_file(file_bytes):
     df["GWac"] = (df["Total_MWac"] / 1000).round(3)
     df["Operating Year"] = df["Operating Year"].astype("Int64")
 
+    # Est. Acres calculation
+    def est_acres(row):
+        mwdc = row["Total_MWdc"]
+        mwac = row["Total_MWac"]
+        if pd.notna(mwdc) and mwdc > 0:
+            return round(5.5 * mwdc, 0)
+        elif pd.notna(mwac) and mwac > 0:
+            return round(5.5 * 1.3 * mwac, 0)
+        return None
+
+    df["Est. Acres"] = df.apply(est_acres, axis=1)
+
     df = df.rename(columns={
         "Total_MWac": "Total MWac",
         "Total_MWdc": "Total MWdc",
@@ -212,20 +239,18 @@ def styled_bar(df_plot, x, y, title, color=None, color_map=None, orientation="v"
 def find_data_file():
     matches = glob.glob("*generator*.xlsx") + glob.glob("*Generator*.xlsx")
     if matches:
-        # Pick the most recently modified if multiple
         return max(matches, key=os.path.getmtime)
     return None
 
 data_file = find_data_file()
+data_loaded = False
 
 if data_file:
     with open(data_file, "rb") as f:
         df_raw = process_file(f.read())
     data_loaded = True
-else:
-    data_loaded = False
 
-# ── Sidebar filters ────────────────────────────────────────────────────────────
+# ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## Filters")
 
@@ -246,7 +271,10 @@ with st.sidebar:
         selected_status = st.multiselect("Status", status_options, default=list(status_options))
 
         year_options = sorted(df_raw["Operating Year"].dropna().unique().tolist())
-        selected_years = st.multiselect("Operating Year", year_options, default=year_options)
+        with st.expander("Operating Year", expanded=False):
+            selected_years = st.multiselect(
+                "Select years", year_options, default=year_options, label_visibility="collapsed"
+            )
 
         state_options = ["All"] + sorted(df_raw["Plant State"].dropna().unique())
         selected_state = st.selectbox("Plant State", state_options)
@@ -254,7 +282,6 @@ with st.sidebar:
         sector_options = ["All"] + sorted(df_raw["Sector"].dropna().unique())
         selected_sector = st.selectbox("Sector", sector_options)
 
-# ── No data ────────────────────────────────────────────────────────────────────
 if not data_loaded:
     st.title("Solar & BESS Market Dashboard")
     st.info("No EIA data file found. Upload the EIA Form 860M Excel file using the sidebar.")
@@ -275,12 +302,13 @@ if selected_state != "All":
 if selected_sector != "All":
     df = df[df["Sector"] == selected_sector]
 
-# ── Navigation tabs ────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊  Market Overview",
-    "☀️  Solar Projects",
-    "🔋  BESS Projects",
-    "🗺️  Project Map"
+# ── Tabs ───────────────────────────────────────────────────────────────────────
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "Market Overview",
+    "Solar Projects",
+    "BESS Projects",
+    "Project Map",
+    "Vegetation"
 ])
 
 # ── Market Overview ────────────────────────────────────────────────────────────
@@ -348,7 +376,7 @@ with tab2:
     st.title("Solar Project List")
     d = df[df["Technology"] == "Solar Photovoltaic"].copy()
     cols = ["Plant Name", "Owner", "Plant State", "County", "Sector", "Segment",
-            "Operating Year", "Status", "Total MWdc", "Total MWac"]
+            "Operating Year", "Status", "Total MWdc", "Total MWac", "Est. Acres"]
     cols = [c for c in cols if c in d.columns]
     d = d[cols].sort_values("Total MWac", ascending=False).reset_index(drop=True)
     st.markdown(f"**{len(d):,} projects** | **{to_gw(d['Total MWac'])} GWac**")
@@ -388,3 +416,59 @@ with tab4:
                     font=dict(family="Inter, sans-serif"))
     )
     st.plotly_chart(fig, use_container_width=True)
+
+# ── Vegetation ─────────────────────────────────────────────────────────────────
+with tab5:
+    st.title("Vegetation Management")
+
+    veg = df_raw[
+        (df_raw["Technology"] == "Solar Photovoltaic") &
+        (df_raw["Segment"] == "Utility") &
+        (df_raw["Plant State"].isin(MIDWEST_STATES)) &
+        (df_raw["Est. Acres"] > 100)
+    ].copy()
+
+    st.markdown(f"**{len(veg):,} utility-scale solar sites** in the Midwest with Est. Acres > 100")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Table
+    table_cols = ["Plant Name", "Owner", "Plant State", "County",
+                  "Est. Acres", "Total MWac", "Operating Year", "Status"]
+    table_cols = [c for c in table_cols if c in veg.columns]
+    veg_display = veg[table_cols].sort_values("Est. Acres", ascending=False).reset_index(drop=True)
+    veg_display["Est. Acres"] = veg_display["Est. Acres"].apply(
+        lambda x: f"{int(x):,}" if pd.notna(x) else ""
+    )
+    st.dataframe(veg_display, use_container_width=True, height=400)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Map
+    veg_map = veg.dropna(subset=["Latitude", "Longitude"]).copy()
+    veg_map = veg_map[(veg_map["Latitude"].between(24, 50)) & (veg_map["Longitude"].between(-125, -66))]
+    veg_map["bubble_size"] = veg_map["Est. Acres"].clip(upper=5000) ** 0.5
+
+    if len(veg_map) > 0:
+        fig_veg = px.scatter_mapbox(
+            veg_map,
+            lat="Latitude", lon="Longitude",
+            size="bubble_size",
+            color="Status",
+            color_discrete_map={"Operating": BLUE_DARK, "Development": AMBER},
+            hover_name="Plant Name",
+            hover_data={"Plant State": True, "County": True, "Status": True,
+                        "Est. Acres": True, "Total MWac": True, "Operating Year": True,
+                        "bubble_size": False, "Latitude": False, "Longitude": False},
+            zoom=4,
+            center={"lat": 42, "lon": -93},
+            mapbox_style="open-street-map",
+            height=500
+        )
+        fig_veg.update_layout(
+            margin=dict(t=0, b=0, l=0, r=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
+                        font=dict(family="Inter, sans-serif"))
+        )
+        st.plotly_chart(fig_veg, use_container_width=True)
+    else:
+        st.info("No sites with coordinates available for mapping.")
