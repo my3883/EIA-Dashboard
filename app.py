@@ -52,6 +52,29 @@ st.markdown("""
         color: #9ca3af;
         margin-top: 2px;
     }
+    .detail-card {
+        background: white;
+        border-radius: 10px;
+        padding: 20px 24px;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+        margin-bottom: 12px;
+    }
+    .detail-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 6px 0;
+        border-bottom: 1px solid #f0f0f0;
+        font-size: 14px;
+    }
+    .detail-label {
+        color: #6c757d;
+        font-weight: 600;
+        min-width: 160px;
+    }
+    .detail-value {
+        color: #1a1a2e;
+        text-align: right;
+    }
     section[data-testid="stSidebar"] {
         background: #ffffff;
         border-right: 1px solid #e5e7eb;
@@ -99,18 +122,14 @@ AMBER = "#FFC000"
 CHART_COLORS = [BLUE_DARK, BLUE_LIGHT, AMBER, "#93c5fd", "#fde68a"]
 
 TECHNOLOGIES = ["Solar Photovoltaic", "Batteries"]
-CHP_SECTORS = {"IPP CHP", "Industrial CHP", "Commercial CHP"}
 MIDWEST_STATES = ["IL", "IN", "IA", "KS", "MI", "MN", "MO", "NE", "ND", "OH", "SD", "WI"]
 
 def clean_sector(s):
     if not isinstance(s, str):
         return s
-    # Fold Commercial/Industrial (CHP and Non-CHP) into IPP
-    if s in ("Commercial Non-CHP", "Industrial Non-CHP", "Commercial CHP", "Industrial CHP"):
+    if s in ("Commercial Non-CHP", "Industrial Non-CHP", "Commercial CHP", "Industrial CHP", "IPP CHP"):
         return "IPP"
-    # Strip Non-CHP from IPP
     s = s.replace(" Non-CHP", "").replace(" CHP", "")
-    # Rename Electric Utility
     if s == "Electric Utility":
         return "Utility Owned"
     return s
@@ -218,11 +237,17 @@ def process_file(file_bytes):
 def to_gw(series):
     return round(pd.to_numeric(series, errors="coerce").sum() / 1000, 1)
 
-def to_gwh(series):
-    return round(pd.to_numeric(series, errors="coerce").sum() / 1000, 1)
+
+def metric_card(col, label, val, sub):
+    with col:
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-label">{label}</div>
+            <div class="metric-value">{val}</div>
+            <div class="metric-sub">{sub}</div>
+        </div>""", unsafe_allow_html=True)
 
 
-def styled_bar(df_plot, x, y, title, color=None, color_map=None, orientation="v", text_fmt=":.1f"):
+def styled_bar(df_plot, x, y, title, color=None, color_map=None, orientation="v"):
     kwargs = dict(title=title, text=y,
                   color_discrete_sequence=CHART_COLORS if color is None else None)
     if color:
@@ -233,7 +258,7 @@ def styled_bar(df_plot, x, y, title, color=None, color_map=None, orientation="v"
         fig = px.bar(df_plot, x=x, y=y, orientation="h", **kwargs)
     else:
         fig = px.bar(df_plot, x=x, y=y, **kwargs)
-    fig.update_traces(textposition="outside", texttemplate=f"%{{text{text_fmt}}}")
+    fig.update_traces(textposition="outside", texttemplate="%{text:.1f}")
     fig.update_layout(
         plot_bgcolor="white", paper_bgcolor="white",
         font=dict(family="Inter, sans-serif", size=12),
@@ -246,14 +271,12 @@ def styled_bar(df_plot, x, y, title, color=None, color_map=None, orientation="v"
     return fig
 
 
-def stacked_bar(df_in, group_col, stack_col, value_col, title, color_map=None, orientation="v"):
-    grp = df_in.groupby([group_col, stack_col])[value_col].sum().reset_index()
+def stacked_bar(df_in, group_col, stack_col, value_col, title, color_map=None):
+    grp = df_in.dropna(subset=[group_col]).groupby([group_col, stack_col])[value_col].sum().reset_index()
     grp["GW"] = (grp[value_col] / 1000).round(2)
     fig = px.bar(
-        grp, x=group_col if orientation == "v" else "GW",
-        y="GW" if orientation == "v" else group_col,
-        color=stack_col, barmode="stack",
-        title=title, orientation=orientation,
+        grp, x=group_col, y="GW", color=stack_col, barmode="stack",
+        title=title,
         color_discrete_map=color_map or {"Utility": BLUE_DARK, "DG": AMBER},
     )
     fig.update_layout(
@@ -263,17 +286,31 @@ def stacked_bar(df_in, group_col, stack_col, value_col, title, color_map=None, o
         margin=dict(t=50, b=40, l=40, r=20),
         xaxis=dict(showgrid=False),
         yaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+        yaxis_title="GW",
     )
     return fig
 
 
-def metric_card(col, label, val, sub):
-    with col:
-        st.markdown(f"""<div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{val}</div>
-            <div class="metric-sub">{sub}</div>
-        </div>""", unsafe_allow_html=True)
+def simple_bar(df_in, group_col, value_col, title, year_range=(2015, 2035)):
+    grp = df_in.dropna(subset=[group_col]).copy()
+    if year_range:
+        grp = grp[grp[group_col].between(*year_range)]
+    grp = grp.groupby(group_col)[value_col].sum().reset_index()
+    grp["GW"] = (grp[value_col] / 1000).round(1)
+    fig = px.bar(grp, x=group_col, y="GW", title=title, text="GW",
+                 color_discrete_sequence=[BLUE_DARK])
+    fig.update_traces(textposition="outside", texttemplate="%{text:.1f}")
+    fig.update_layout(
+        plot_bgcolor="white", paper_bgcolor="white",
+        font=dict(family="Inter, sans-serif", size=12),
+        title_font=dict(family="Monda, sans-serif", size=14, color=BLUE_DARK),
+        showlegend=False,
+        margin=dict(t=50, b=40, l=40, r=20),
+        xaxis=dict(showgrid=False),
+        yaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+        yaxis_title="GW",
+    )
+    return fig
 
 
 def make_map(df_map, height=680, center_lat=38.5, center_lon=-96, zoom=3.5):
@@ -360,13 +397,14 @@ solar_df = df[df["Technology"] == "Solar Photovoltaic"].copy()
 bess_df = df[df["Technology"] == "Batteries"].copy()
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "Solar Market",
     "BESS Market",
     "Solar Projects",
     "BESS Projects",
     "Project Map",
-    "Vegetation"
+    "Vegetation",
+    "Search"
 ])
 
 # ── Solar Market ───────────────────────────────────────────────────────────────
@@ -383,18 +421,19 @@ with tab1:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # GWac by operating year stacked by segment
     yr_solar = solar_df[solar_df["Operating Year"].between(2015, 2035)]
-    fig_yr = stacked_bar(yr_solar, "Operating Year", "Segment", "Total MWac",
-                         "GWac by Operating Year (Utility vs DG)")
+    fig_yr = stacked_bar(
+        yr_solar, "Operating Year", "Segment", "Total MWac",
+        "GWac by Operating Year",
+        color_map={"Utility": BLUE_DARK, "DG": BLUE_LIGHT}
+    )
     st.plotly_chart(fig_yr, use_container_width=True)
 
-    # Top 15 states by GWac
-    st8 = solar_df.groupby("State")["Total MWac"].sum().reset_index()
+    st8 = solar_df.dropna(subset=["State"]).groupby("State")["Total MWac"].sum().reset_index()
     st8["GWac"] = (st8["Total MWac"] / 1000).round(1)
     st8 = st8.nlargest(15, "GWac").sort_values("GWac")
-    fig_st = styled_bar(st8, "GWac", "State", "Top 15 States by GWac", orientation="h")
-    st.plotly_chart(fig_st, use_container_width=True)
+    st.plotly_chart(styled_bar(st8, "GWac", "State", "Top 15 States by GWac", orientation="h"),
+                    use_container_width=True)
 
 # ── BESS Market ────────────────────────────────────────────────────────────────
 with tab2:
@@ -402,35 +441,30 @@ with tab2:
 
     c1, c2 = st.columns(2)
     metric_card(c1, "Total GWac", to_gw(bess_df["Total MWac"]), f"{len(bess_df):,} plants")
-    metric_card(c2, "Total GWh", to_gwh(bess_df["Total MWh"]), "Energy capacity")
+    metric_card(c2, "Total GWh", to_gw(bess_df["Total MWh"]), "Energy capacity")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
     cl, cr = st.columns(2)
-
     with cl:
-        yr_bess = bess_df[bess_df["Operating Year"].between(2015, 2035)]
-        fig_yr_bess = stacked_bar(yr_bess, "Operating Year", "Segment", "Total MWac",
-                                  "GWac by Operating Year (Utility vs DG)")
-        st.plotly_chart(fig_yr_bess, use_container_width=True)
+        fig_bess_yr = simple_bar(bess_df, "Operating Year", "Total MWac", "GWac by Operating Year")
+        st.plotly_chart(fig_bess_yr, use_container_width=True)
 
     with cr:
-        yr_bess_mwh = bess_df[bess_df["Operating Year"].between(2015, 2035)].dropna(subset=["Total MWh"])
-        fig_yr_gwh = stacked_bar(yr_bess_mwh, "Operating Year", "Segment", "Total MWh",
-                                 "GWh by Operating Year (Utility vs DG)")
-        st.plotly_chart(fig_yr_gwh, use_container_width=True)
+        fig_bess_gwh = simple_bar(bess_df.dropna(subset=["Total MWh"]),
+                                  "Operating Year", "Total MWh", "GWh by Operating Year")
+        st.plotly_chart(fig_bess_gwh, use_container_width=True)
 
     cl2, cr2 = st.columns(2)
-
     with cl2:
-        st8_bess = bess_df.groupby("State")["Total MWac"].sum().reset_index()
+        st8_bess = bess_df.dropna(subset=["State"]).groupby("State")["Total MWac"].sum().reset_index()
         st8_bess["GWac"] = (st8_bess["Total MWac"] / 1000).round(1)
         st8_bess = st8_bess.nlargest(15, "GWac").sort_values("GWac")
         st.plotly_chart(styled_bar(st8_bess, "GWac", "State", "Top 15 States by GWac",
                                    orientation="h"), use_container_width=True)
 
     with cr2:
-        st8_gwh = bess_df.groupby("State")["Total MWh"].sum().reset_index().dropna()
+        st8_gwh = bess_df.dropna(subset=["State", "Total MWh"]).groupby("State")["Total MWh"].sum().reset_index()
         st8_gwh["GWh"] = (st8_gwh["Total MWh"] / 1000).round(1)
         st8_gwh = st8_gwh.nlargest(15, "GWh").sort_values("GWh")
         st.plotly_chart(styled_bar(st8_gwh, "GWh", "State", "Top 15 States by GWh",
@@ -439,22 +473,20 @@ with tab2:
 # ── Solar Projects ─────────────────────────────────────────────────────────────
 with tab3:
     st.title("Solar Project List")
-    d = solar_df.copy()
-    cols = ["Plant Name", "Owner", "State", "County", "Operating Year", "Status",
-            "Total MWdc", "Total MWac"]
-    cols = [c for c in cols if c in d.columns]
-    d = d[cols].sort_values("Total MWac", ascending=False).reset_index(drop=True)
+    d = solar_df[["Plant Name", "Owner", "State", "County", "Operating Year",
+                  "Status", "Total MWdc", "Total MWac"]].copy()
+    d = d[[c for c in d.columns if c in solar_df.columns]]
+    d = d.sort_values("Total MWac", ascending=False).reset_index(drop=True)
     st.markdown(f"**{len(d):,} projects** | **{to_gw(d['Total MWac'])} GWac**")
     st.dataframe(d, use_container_width=True, height=650)
 
 # ── BESS Projects ──────────────────────────────────────────────────────────────
 with tab4:
     st.title("BESS Project List")
-    d = bess_df.copy()
-    cols = ["Plant Name", "Owner", "State", "County", "Operating Year", "Status",
-            "Total MWh", "Total MWac"]
-    cols = [c for c in cols if c in d.columns]
-    d = d[cols].sort_values("Total MWac", ascending=False).reset_index(drop=True)
+    d = bess_df[["Plant Name", "Owner", "State", "County", "Operating Year",
+                 "Status", "Total MWh", "Total MWac"]].copy()
+    d = d[[c for c in d.columns if c in bess_df.columns]]
+    d = d.sort_values("Total MWac", ascending=False).reset_index(drop=True)
     st.markdown(f"**{len(d):,} projects** | **{to_gw(d['Total MWac'])} GWac**")
     st.dataframe(d, use_container_width=True, height=650)
 
@@ -494,10 +526,8 @@ with tab6:
 
     if len(veg_map) > 0:
         fig_veg = px.scatter_mapbox(
-            veg_map,
-            lat="Latitude", lon="Longitude",
-            size="bubble_size",
-            color="Status",
+            veg_map, lat="Latitude", lon="Longitude",
+            size="bubble_size", color="Status",
             color_discrete_map={"Operating": BLUE_DARK, "Development": AMBER},
             hover_name="Plant Name",
             hover_data={"State": True, "County": True, "Status": True,
@@ -514,3 +544,91 @@ with tab6:
         st.plotly_chart(fig_veg, use_container_width=True)
     else:
         st.info("No sites with coordinates available for mapping.")
+
+# ── Search ─────────────────────────────────────────────────────────────────────
+with tab7:
+    st.title("Plant Search")
+
+    search_query = st.text_input("Search plant name", placeholder="e.g. Desert Sunlight, Gemini...")
+
+    if search_query:
+        results = df_raw[df_raw["Plant Name"].str.contains(search_query, case=False, na=False)].copy()
+
+        if len(results) == 0:
+            st.warning("No plants found matching that name.")
+        else:
+            # If multiple matches show a selector
+            plant_names = sorted(results["Plant Name"].unique())
+            if len(plant_names) > 1:
+                selected_plant = st.selectbox(f"{len(plant_names)} plants found -- select one", plant_names)
+            else:
+                selected_plant = plant_names[0]
+
+            plant_rows = results[results["Plant Name"] == selected_plant]
+            row = plant_rows.iloc[0]
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Detail cards
+            col_left, col_right = st.columns([1, 1])
+
+            with col_left:
+                st.markdown("### Plant Details")
+
+                def detail_row(label, value):
+                    if pd.isna(value) or value == "" or value is None:
+                        value = "—"
+                    return f'<div class="detail-row"><span class="detail-label">{label}</span><span class="detail-value">{value}</span></div>'
+
+                details_html = '<div class="detail-card">'
+                details_html += detail_row("Plant Name", row.get("Plant Name", ""))
+                details_html += detail_row("Owner", row.get("Owner", ""))
+                details_html += detail_row("State", row.get("State", ""))
+                details_html += detail_row("County", row.get("County", ""))
+                details_html += detail_row("Technology", row.get("Technology", ""))
+                details_html += detail_row("Sector", row.get("Sector", ""))
+                details_html += detail_row("Segment", row.get("Segment", ""))
+                details_html += detail_row("Status", row.get("Status", ""))
+                details_html += detail_row("Operating Year", str(row.get("Operating Year", "")))
+                details_html += detail_row("Total MWac", f"{row.get('Total MWac', 0):,.1f}")
+                mwdc = row.get("Total MWdc", None)
+                details_html += detail_row("Total MWdc", f"{mwdc:,.1f}" if pd.notna(mwdc) and mwdc else "—")
+                mwh = row.get("Total MWh", None)
+                details_html += detail_row("Total MWh", f"{mwh:,.1f}" if pd.notna(mwh) and mwh else "—")
+                acres = row.get("Est. Acres", None)
+                details_html += detail_row("Est. Acres", f"{int(acres):,}" if pd.notna(acres) and acres else "—")
+                lat = row.get("Latitude", None)
+                lon = row.get("Longitude", None)
+                details_html += detail_row("Coordinates", f"{lat:.4f}, {lon:.4f}" if pd.notna(lat) and pd.notna(lon) else "—")
+                details_html += '</div>'
+
+                st.markdown(details_html, unsafe_allow_html=True)
+
+                # If multiple technology rows (solar + BESS co-located) show them
+                if len(plant_rows) > 1:
+                    st.markdown("**Co-located assets at this plant:**")
+                    sub = plant_rows[["Technology", "Total MWac", "Total MWh", "Segment"]].reset_index(drop=True)
+                    st.dataframe(sub, use_container_width=True)
+
+            with col_right:
+                st.markdown("### Location")
+                if pd.notna(lat) and pd.notna(lon):
+                    # Satellite map via Google Maps embed (no API key needed for basic embed)
+                    zoom_level = 14
+                    google_maps_url = f"https://maps.google.com/maps?q={lat},{lon}&z={zoom_level}&output=embed&t=k"
+                    st.components.v1.iframe(google_maps_url, height=460)
+
+                    # Also show a small plotly marker map for context
+                    fig_single = px.scatter_mapbox(
+                        pd.DataFrame({"lat": [lat], "lon": [lon], "name": [selected_plant]}),
+                        lat="lat", lon="lon", hover_name="name",
+                        zoom=9, center={"lat": lat, "lon": lon},
+                        mapbox_style="open-street-map", height=200
+                    )
+                    fig_single.update_traces(marker=dict(size=14, color=AMBER))
+                    fig_single.update_layout(margin=dict(t=0, b=0, l=0, r=0))
+                    st.plotly_chart(fig_single, use_container_width=True)
+                else:
+                    st.info("No coordinates available for this plant.")
+    else:
+        st.markdown("Enter a plant name above to search. Partial matches are supported.")
