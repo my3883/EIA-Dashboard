@@ -56,22 +56,15 @@ st.markdown("""
         background: #ffffff;
         border-right: 1px solid #e5e7eb;
     }
-    /* Multiselect tag color */
     span[data-baseweb="tag"] {
         background-color: #0074FF !important;
     }
     span[data-baseweb="tag"] span {
         color: white !important;
     }
-    /* Multiselect focus border */
-    div[data-baseweb="select"] > div:focus-within {
-        border-color: #0074FF !important;
-    }
-    /* Selectbox focus */
     div[data-baseweb="select"] > div {
         border-color: #0074FF !important;
     }
-    /* Tab styling */
     div[data-testid="stTabs"] [role="tablist"] {
         gap: 4px;
         border-bottom: 2px solid #e5e7eb;
@@ -110,8 +103,16 @@ CHP_SECTORS = {"IPP CHP", "Industrial CHP", "Commercial CHP"}
 MIDWEST_STATES = ["IL", "IN", "IA", "KS", "MI", "MN", "MO", "NE", "ND", "OH", "SD", "WI"]
 
 def clean_sector(s):
-    if isinstance(s, str):
-        return s.replace(" Non-CHP", "").replace(" CHP", "")
+    if not isinstance(s, str):
+        return s
+    # Fold Commercial/Industrial (CHP and Non-CHP) into IPP
+    if s in ("Commercial Non-CHP", "Industrial Non-CHP", "Commercial CHP", "Industrial CHP"):
+        return "IPP"
+    # Strip Non-CHP from IPP
+    s = s.replace(" Non-CHP", "").replace(" CHP", "")
+    # Rename Electric Utility
+    if s == "Electric Utility":
+        return "Utility Owned"
     return s
 
 OPERATING_KEEP = [
@@ -138,7 +139,6 @@ def process_file(file_bytes):
     op = op[[c for c in OPERATING_KEEP if c in op.columns]].copy()
     op = op[op["Plant State"] != "PR"]
     op = op[op["Technology"].isin(TECHNOLOGIES)]
-    op = op[~op["Sector"].isin(CHP_SECTORS)]
     op["Sector"] = op["Sector"].apply(clean_sector)
     op = op.rename(columns={
         "Nameplate Capacity (MW)": "MWac",
@@ -152,7 +152,6 @@ def process_file(file_bytes):
     pl = pl[[c for c in PLANNED_KEEP if c in pl.columns]].copy()
     pl = pl[pl["Plant State"] != "PR"]
     pl = pl[pl["Technology"].isin(TECHNOLOGIES)]
-    pl = pl[~pl["Sector"].isin(CHP_SECTORS)]
     pl["Sector"] = pl["Sector"].apply(clean_sector)
     pl = pl.rename(columns={
         "Nameplate Capacity (MW)": "MWac",
@@ -210,6 +209,7 @@ def process_file(file_bytes):
         "Total_MWdc": "Total MWdc",
         "Total_MWh": "Total MWh",
         "Entity Name": "Owner",
+        "Plant State": "State",
     })
     df = df.drop(columns=["Status_Simple"], errors="ignore")
     return df
@@ -218,16 +218,22 @@ def process_file(file_bytes):
 def to_gw(series):
     return round(pd.to_numeric(series, errors="coerce").sum() / 1000, 1)
 
+def to_gwh(series):
+    return round(pd.to_numeric(series, errors="coerce").sum() / 1000, 1)
 
-def styled_bar(df_plot, x, y, title, color=None, color_map=None, orientation="v"):
+
+def styled_bar(df_plot, x, y, title, color=None, color_map=None, orientation="v", text_fmt=":.1f"):
     kwargs = dict(title=title, text=y,
                   color_discrete_sequence=CHART_COLORS if color is None else None)
     if color:
         kwargs["color"] = color
     if color_map:
         kwargs["color_discrete_map"] = color_map
-    fig = px.bar(df_plot, x=x, y=y, orientation=orientation, **kwargs) if orientation == "h" else px.bar(df_plot, x=x, y=y, **kwargs)
-    fig.update_traces(textposition="outside", texttemplate="%{text:.1f}")
+    if orientation == "h":
+        fig = px.bar(df_plot, x=x, y=y, orientation="h", **kwargs)
+    else:
+        fig = px.bar(df_plot, x=x, y=y, **kwargs)
+    fig.update_traces(textposition="outside", texttemplate=f"%{{text{text_fmt}}}")
     fig.update_layout(
         plot_bgcolor="white", paper_bgcolor="white",
         font=dict(family="Inter, sans-serif", size=12),
@@ -240,6 +246,36 @@ def styled_bar(df_plot, x, y, title, color=None, color_map=None, orientation="v"
     return fig
 
 
+def stacked_bar(df_in, group_col, stack_col, value_col, title, color_map=None, orientation="v"):
+    grp = df_in.groupby([group_col, stack_col])[value_col].sum().reset_index()
+    grp["GW"] = (grp[value_col] / 1000).round(2)
+    fig = px.bar(
+        grp, x=group_col if orientation == "v" else "GW",
+        y="GW" if orientation == "v" else group_col,
+        color=stack_col, barmode="stack",
+        title=title, orientation=orientation,
+        color_discrete_map=color_map or {"Utility": BLUE_DARK, "DG": AMBER},
+    )
+    fig.update_layout(
+        plot_bgcolor="white", paper_bgcolor="white",
+        font=dict(family="Inter, sans-serif", size=12),
+        title_font=dict(family="Monda, sans-serif", size=14, color=BLUE_DARK),
+        margin=dict(t=50, b=40, l=40, r=20),
+        xaxis=dict(showgrid=False),
+        yaxis=dict(showgrid=True, gridcolor="#f0f0f0"),
+    )
+    return fig
+
+
+def metric_card(col, label, val, sub):
+    with col:
+        st.markdown(f"""<div class="metric-card">
+            <div class="metric-label">{label}</div>
+            <div class="metric-value">{val}</div>
+            <div class="metric-sub">{sub}</div>
+        </div>""", unsafe_allow_html=True)
+
+
 def make_map(df_map, height=680, center_lat=38.5, center_lon=-96, zoom=3.5):
     m = df_map.dropna(subset=["Latitude", "Longitude", "Total MWac"]).copy()
     m = m[(m["Latitude"].between(24, 50)) & (m["Longitude"].between(-125, -66))]
@@ -249,7 +285,7 @@ def make_map(df_map, height=680, center_lat=38.5, center_lon=-96, zoom=3.5):
         size="bubble_size", color="Technology",
         color_discrete_map={"Solar Photovoltaic": BLUE_DARK, "Batteries": AMBER},
         hover_name="Plant Name",
-        hover_data={"Plant State": True, "Segment": True, "Status": True,
+        hover_data={"State": True, "Segment": True, "Status": True,
                     "Total MWac": True, "Operating Year": True,
                     "bubble_size": False, "Latitude": False, "Longitude": False},
         zoom=zoom, center={"lat": center_lat, "lon": center_lon},
@@ -261,27 +297,6 @@ def make_map(df_map, height=680, center_lat=38.5, center_lon=-96, zoom=3.5):
                     font=dict(family="Inter, sans-serif"))
     )
     return fig
-
-
-def market_kpis(df, tech):
-    operating = df[df["Status"] == "Operating"]
-    development = df[df["Status"] == "Development"]
-    utility = df[df["Segment"] == "Utility"]
-    dg = df[df["Segment"] == "DG"]
-    c1, c2, c3, c4, c5 = st.columns(5)
-    for col, label, val, sub in [
-        (c1, "Total GWac", to_gw(df["Total MWac"]), f"{len(df):,} plants"),
-        (c2, "Operating GWac", to_gw(operating["Total MWac"]), f"{len(operating):,} plants"),
-        (c3, "Development GWac", to_gw(development["Total MWac"]), f"{len(development):,} plants"),
-        (c4, "Utility GWac", to_gw(utility["Total MWac"]), f"{len(utility):,} plants"),
-        (c5, "DG GWac", to_gw(dg["Total MWac"]), f"{len(dg):,} plants"),
-    ]:
-        with col:
-            st.markdown(f"""<div class="metric-card">
-                <div class="metric-label">{label}</div>
-                <div class="metric-value">{val}</div>
-                <div class="metric-sub">{sub}</div>
-            </div>""", unsafe_allow_html=True)
 
 
 # ── Find data file ─────────────────────────────────────────────────────────────
@@ -317,11 +332,11 @@ with st.sidebar:
         year_options = sorted(df_raw["Operating Year"].dropna().unique().tolist())
         selected_years = st.multiselect("Operating Year", year_options, default=year_options)
 
-        state_options = ["All"] + sorted(df_raw["Plant State"].dropna().unique())
-        selected_state = st.selectbox("Plant State", state_options)
+        state_options = sorted(df_raw["State"].dropna().unique())
+        selected_states = st.multiselect("State", state_options, default=list(state_options))
 
-        sector_options = ["All"] + sorted(df_raw["Sector"].dropna().unique())
-        selected_sector = st.selectbox("Sector", sector_options)
+        sector_options = sorted(df_raw["Sector"].dropna().unique())
+        selected_sectors = st.multiselect("Sector", sector_options, default=list(sector_options))
 
 if not data_loaded:
     st.title("Solar & BESS Market Dashboard")
@@ -336,10 +351,10 @@ if selected_status:
     df = df[df["Status"].isin(selected_status)]
 if selected_years:
     df = df[df["Operating Year"].isin(selected_years)]
-if selected_state != "All":
-    df = df[df["Plant State"] == selected_state]
-if selected_sector != "All":
-    df = df[df["Sector"] == selected_sector]
+if selected_states:
+    df = df[df["State"].isin(selected_states)]
+if selected_sectors:
+    df = df[df["Sector"].isin(selected_sectors)]
 
 solar_df = df[df["Technology"] == "Solar Photovoltaic"].copy()
 bess_df = df[df["Technology"] == "Batteries"].copy()
@@ -357,80 +372,76 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # ── Solar Market ───────────────────────────────────────────────────────────────
 with tab1:
     st.title("Solar Market Overview")
-    market_kpis(solar_df, "Solar Photovoltaic")
+
+    operating = solar_df[solar_df["Status"] == "Operating"]
+    development = solar_df[solar_df["Status"] == "Development"]
+
+    c1, c2, c3 = st.columns(3)
+    metric_card(c1, "Total GWac", to_gw(solar_df["Total MWac"]), f"{len(solar_df):,} plants")
+    metric_card(c2, "Operating GWac", to_gw(operating["Total MWac"]), f"{len(operating):,} plants")
+    metric_card(c3, "Development GWac", to_gw(development["Total MWac"]), f"{len(development):,} plants")
+
     st.markdown("<br>", unsafe_allow_html=True)
 
-    cl, cr = st.columns(2)
-    with cl:
-        yr = solar_df.groupby("Operating Year")["Total MWac"].sum().reset_index()
-        yr["GWac"] = (yr["Total MWac"] / 1000).round(1)
-        yr = yr[yr["Operating Year"].between(2015, 2035)]
-        st.plotly_chart(styled_bar(yr, "Operating Year", "GWac", "GWac by Operating Year"),
-                        use_container_width=True)
-    with cr:
-        seg = solar_df.groupby(["Segment", "Status"])["Total MWac"].sum().reset_index()
-        seg["GWac"] = (seg["Total MWac"] / 1000).round(1)
-        st.plotly_chart(styled_bar(seg, "Segment", "GWac", "GWac by Segment and Status",
-                                   color="Status",
-                                   color_map={"Operating": BLUE_DARK, "Development": BLUE_LIGHT}),
-                        use_container_width=True)
+    # GWac by operating year stacked by segment
+    yr_solar = solar_df[solar_df["Operating Year"].between(2015, 2035)]
+    fig_yr = stacked_bar(yr_solar, "Operating Year", "Segment", "Total MWac",
+                         "GWac by Operating Year (Utility vs DG)")
+    st.plotly_chart(fig_yr, use_container_width=True)
 
-    cl2, cr2 = st.columns(2)
-    with cl2:
-        st8 = solar_df.groupby("Plant State")["Total MWac"].sum().reset_index()
-        st8["GWac"] = (st8["Total MWac"] / 1000).round(1)
-        st8 = st8.nlargest(15, "GWac").sort_values("GWac")
-        st.plotly_chart(styled_bar(st8, "GWac", "Plant State", "Top 15 States by GWac",
-                                   orientation="h"), use_container_width=True)
-    with cr2:
-        sec = solar_df.groupby("Sector")["Total MWac"].sum().reset_index()
-        sec["GWac"] = (sec["Total MWac"] / 1000).round(1)
-        sec = sec.sort_values("GWac", ascending=False)
-        st.plotly_chart(styled_bar(sec, "Sector", "GWac", "GWac by Sector"),
-                        use_container_width=True)
+    # Top 15 states by GWac
+    st8 = solar_df.groupby("State")["Total MWac"].sum().reset_index()
+    st8["GWac"] = (st8["Total MWac"] / 1000).round(1)
+    st8 = st8.nlargest(15, "GWac").sort_values("GWac")
+    fig_st = styled_bar(st8, "GWac", "State", "Top 15 States by GWac", orientation="h")
+    st.plotly_chart(fig_st, use_container_width=True)
 
 # ── BESS Market ────────────────────────────────────────────────────────────────
 with tab2:
     st.title("BESS Market Overview")
-    market_kpis(bess_df, "Batteries")
+
+    c1, c2 = st.columns(2)
+    metric_card(c1, "Total GWac", to_gw(bess_df["Total MWac"]), f"{len(bess_df):,} plants")
+    metric_card(c2, "Total GWh", to_gwh(bess_df["Total MWh"]), "Energy capacity")
+
     st.markdown("<br>", unsafe_allow_html=True)
 
     cl, cr = st.columns(2)
+
     with cl:
-        yr = bess_df.groupby("Operating Year")["Total MWac"].sum().reset_index()
-        yr["GWac"] = (yr["Total MWac"] / 1000).round(1)
-        yr = yr[yr["Operating Year"].between(2015, 2035)]
-        st.plotly_chart(styled_bar(yr, "Operating Year", "GWac", "GWac by Operating Year"),
-                        use_container_width=True)
+        yr_bess = bess_df[bess_df["Operating Year"].between(2015, 2035)]
+        fig_yr_bess = stacked_bar(yr_bess, "Operating Year", "Segment", "Total MWac",
+                                  "GWac by Operating Year (Utility vs DG)")
+        st.plotly_chart(fig_yr_bess, use_container_width=True)
+
     with cr:
-        seg = bess_df.groupby(["Segment", "Status"])["Total MWac"].sum().reset_index()
-        seg["GWac"] = (seg["Total MWac"] / 1000).round(1)
-        st.plotly_chart(styled_bar(seg, "Segment", "GWac", "GWac by Segment and Status",
-                                   color="Status",
-                                   color_map={"Operating": BLUE_DARK, "Development": BLUE_LIGHT}),
-                        use_container_width=True)
+        yr_bess_mwh = bess_df[bess_df["Operating Year"].between(2015, 2035)].dropna(subset=["Total MWh"])
+        fig_yr_gwh = stacked_bar(yr_bess_mwh, "Operating Year", "Segment", "Total MWh",
+                                 "GWh by Operating Year (Utility vs DG)")
+        st.plotly_chart(fig_yr_gwh, use_container_width=True)
 
     cl2, cr2 = st.columns(2)
+
     with cl2:
-        st8 = bess_df.groupby("Plant State")["Total MWac"].sum().reset_index()
-        st8["GWac"] = (st8["Total MWac"] / 1000).round(1)
-        st8 = st8.nlargest(15, "GWac").sort_values("GWac")
-        st.plotly_chart(styled_bar(st8, "GWac", "Plant State", "Top 15 States by GWac",
+        st8_bess = bess_df.groupby("State")["Total MWac"].sum().reset_index()
+        st8_bess["GWac"] = (st8_bess["Total MWac"] / 1000).round(1)
+        st8_bess = st8_bess.nlargest(15, "GWac").sort_values("GWac")
+        st.plotly_chart(styled_bar(st8_bess, "GWac", "State", "Top 15 States by GWac",
                                    orientation="h"), use_container_width=True)
+
     with cr2:
-        mwh = bess_df.groupby("Plant State")["Total MWh"].sum().reset_index()
-        mwh = mwh.dropna()
-        mwh["GWh"] = (mwh["Total MWh"] / 1000).round(1)
-        mwh = mwh.nlargest(15, "GWh").sort_values("GWh")
-        st.plotly_chart(styled_bar(mwh, "GWh", "Plant State", "Top 15 States by GWh",
+        st8_gwh = bess_df.groupby("State")["Total MWh"].sum().reset_index().dropna()
+        st8_gwh["GWh"] = (st8_gwh["Total MWh"] / 1000).round(1)
+        st8_gwh = st8_gwh.nlargest(15, "GWh").sort_values("GWh")
+        st.plotly_chart(styled_bar(st8_gwh, "GWh", "State", "Top 15 States by GWh",
                                    orientation="h"), use_container_width=True)
 
 # ── Solar Projects ─────────────────────────────────────────────────────────────
 with tab3:
     st.title("Solar Project List")
     d = solar_df.copy()
-    cols = ["Plant Name", "Owner", "Plant State", "County",
-            "Operating Year", "Status", "Total MWdc", "Total MWac"]
+    cols = ["Plant Name", "Owner", "State", "County", "Operating Year", "Status",
+            "Total MWdc", "Total MWac"]
     cols = [c for c in cols if c in d.columns]
     d = d[cols].sort_values("Total MWac", ascending=False).reset_index(drop=True)
     st.markdown(f"**{len(d):,} projects** | **{to_gw(d['Total MWac'])} GWac**")
@@ -440,8 +451,8 @@ with tab3:
 with tab4:
     st.title("BESS Project List")
     d = bess_df.copy()
-    cols = ["Plant Name", "Owner", "Plant State", "County",
-            "Operating Year", "Status", "Total MWh", "Total MWac"]
+    cols = ["Plant Name", "Owner", "State", "County", "Operating Year", "Status",
+            "Total MWh", "Total MWac"]
     cols = [c for c in cols if c in d.columns]
     d = d[cols].sort_values("Total MWac", ascending=False).reset_index(drop=True)
     st.markdown(f"**{len(d):,} projects** | **{to_gw(d['Total MWac'])} GWac**")
@@ -459,14 +470,14 @@ with tab6:
     veg = df[
         (df["Technology"] == "Solar Photovoltaic") &
         (df["Segment"] == "Utility") &
-        (df["Plant State"].isin(MIDWEST_STATES)) &
+        (df["State"].isin(MIDWEST_STATES)) &
         (df["Est. Acres"] > 1000)
     ].copy()
 
     st.markdown(f"**{len(veg):,} utility-scale solar sites** in the Midwest with Est. Acres > 1,000")
     st.markdown("<br>", unsafe_allow_html=True)
 
-    table_cols = ["Plant Name", "Owner", "Plant State", "County",
+    table_cols = ["Plant Name", "Owner", "State", "County",
                   "Est. Acres", "Total MWac", "Operating Year", "Status"]
     table_cols = [c for c in table_cols if c in veg.columns]
     veg_display = veg[table_cols].sort_values("Est. Acres", ascending=False).reset_index(drop=True)
@@ -489,7 +500,7 @@ with tab6:
             color="Status",
             color_discrete_map={"Operating": BLUE_DARK, "Development": AMBER},
             hover_name="Plant Name",
-            hover_data={"Plant State": True, "County": True, "Status": True,
+            hover_data={"State": True, "County": True, "Status": True,
                         "Est. Acres": True, "Total MWac": True, "Operating Year": True,
                         "bubble_size": False, "Latitude": False, "Longitude": False},
             zoom=4, center={"lat": 42, "lon": -93},
