@@ -233,7 +233,7 @@ def process_file(file_bytes):
         "Total_MWac": "Total MWac",
         "Total_MWdc": "Total MWdc",
         "Total_MWh": "Total MWh",
-        "Entity Name": "EIA Entity",
+        "Entity Name": "Project Entity",
         "Plant State": "State",
     })
     df = df.drop(columns=["Status_Simple"], errors="ignore")
@@ -350,8 +350,7 @@ def find_data_file():
 @st.cache_data
 def load_ownership():
     try:
-        owners = pd.read_excel("eia asset owners.xlsx")
-        # Normalize column names -- expect Plant Name, EIA Entity, Owner
+        owners = pd.read_excel("EIA Asset Owners.xlsx")
         owners.columns = owners.columns.str.strip()
         if "Plant Name" in owners.columns and "Owner" in owners.columns:
             return owners[["Plant Name", "Owner"]].drop_duplicates(subset=["Plant Name"])
@@ -363,7 +362,13 @@ def apply_ownership(df, owners):
     if owners.empty:
         df["Owner"] = None
         return df
+    # Strip whitespace from join key on both sides
+    df["Plant Name"] = df["Plant Name"].str.strip()
+    owners = owners.copy()
+    owners["Plant Name"] = owners["Plant Name"].str.strip()
     df = df.merge(owners, on="Plant Name", how="left")
+    if "Owner" not in df.columns:
+        df["Owner"] = None
     return df
 
 data_file = find_data_file()
@@ -502,7 +507,7 @@ with tab2:
 # ── Solar Projects ─────────────────────────────────────────────────────────────
 with tab3:
     st.title("Solar Project List")
-    cols = ["Plant Name", "Owner", "EIA Entity", "State", "County", "Operating Year",
+    cols = ["Plant Name", "Owner", "Project Entity", "State", "County", "Operating Year",
             "Status", "Total MWdc", "Total MWac"]
     cols = [c for c in cols if c in solar_df.columns]
     d = solar_df[cols].sort_values("Total MWac", ascending=False).reset_index(drop=True)
@@ -512,7 +517,7 @@ with tab3:
 # ── BESS Projects ──────────────────────────────────────────────────────────────
 with tab4:
     st.title("BESS Project List")
-    cols = ["Plant Name", "Owner", "EIA Entity", "State", "County", "Operating Year",
+    cols = ["Plant Name", "Owner", "Project Entity", "State", "County", "Operating Year",
             "Status", "Total MWh", "Total MWac"]
     cols = [c for c in cols if c in bess_df.columns]
     d = bess_df[cols].sort_values("Total MWac", ascending=False).reset_index(drop=True)
@@ -538,7 +543,7 @@ with tab6:
     st.markdown(f"**{len(veg):,} utility-scale solar sites** in the Midwest with Est. Acres > 1,000")
     st.markdown("<br>", unsafe_allow_html=True)
 
-    table_cols = ["Plant Name", "Owner", "EIA Entity", "State", "County",
+    table_cols = ["Plant Name", "Owner", "Project Entity", "State", "County",
                   "Est. Acres", "Total MWac", "Operating Year", "Status"]
     table_cols = [c for c in table_cols if c in veg.columns]
     veg_display = veg[table_cols].sort_values("Est. Acres", ascending=False).reset_index(drop=True)
@@ -600,7 +605,7 @@ with tab7:
             # Owner-only search: show a summary table first
             if search_owner and not search_name:
                 st.markdown(f"**{len(results):,} plants found for owner matching '{search_owner}'**")
-                owner_cols = ["Plant Name", "Owner", "EIA Entity", "State", "County", "Technology",
+                owner_cols = ["Plant Name", "Owner", "Project Entity", "State", "County", "Technology",
                               "Segment", "Status", "Operating Year", "Total MWac", "Total MWh"]
                 owner_cols = [c for c in owner_cols if c in results.columns]
                 st.dataframe(
@@ -636,7 +641,7 @@ with tab7:
                 details_html = '<div class="detail-card">'
                 details_html += detail_row("Plant Name", row.get("Plant Name", ""))
                 details_html += detail_row("Owner", row.get("Owner", ""))
-                details_html += detail_row("EIA Entity", row.get("EIA Entity", ""))
+                details_html += detail_row("Project Entity", row.get("Project Entity", ""))
                 details_html += detail_row("State", row.get("State", ""))
                 details_html += detail_row("County", row.get("County", ""))
                 details_html += detail_row("Technology", row.get("Technology", ""))
