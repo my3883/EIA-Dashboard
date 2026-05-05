@@ -712,8 +712,9 @@ with tab7:
 
                 if len(nearby) > 0:
                     # Table
-                    nearby_cols = ["Plant Name", "Owner", "State", "County", "Technology",
-                                   "Segment", "Status", "Operating Year", "Total MWac", "Distance (mi)"]
+                    nearby_cols = ["Plant Name", "Owner", "Project Entity", "State", "County", "Technology",
+                                   "Segment", "Status", "Operating Year", "Total MWac", "Total MWdc",
+                                   "Total MWh", "Distance (mi)"]
                     nearby_cols = [c for c in nearby_cols if c in nearby.columns]
                     nearby_display = nearby[nearby_cols].reset_index(drop=True)
                     nearby_display["Distance (mi)"] = nearby_display["Distance (mi)"].round(1)
