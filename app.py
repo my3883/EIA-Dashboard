@@ -684,24 +684,10 @@ with tab7:
                 st.markdown("---")
                 st.markdown("### Nearby Projects")
 
-                nearby_col1, nearby_col2, nearby_col3 = st.columns([1, 1, 2])
-                with nearby_col1:
-                    radius_miles = st.number_input(
-                        "Search radius (miles)", min_value=1, max_value=500,
-                        value=50, step=5
-                    )
-                with nearby_col2:
-                    nearby_tech = st.multiselect(
-                        "Technology", ["Solar Photovoltaic", "Batteries"],
-                        default=["Solar Photovoltaic", "Batteries"],
-                        key="nearby_tech"
-                    )
-                with nearby_col3:
-                    nearby_status = st.multiselect(
-                        "Status", ["Operating", "Development"],
-                        default=["Operating", "Development"],
-                        key="nearby_status"
-                    )
+                radius_miles = st.number_input(
+                    "Search radius (miles)", min_value=1, max_value=500,
+                    value=50, step=5
+                )
 
                 # Haversine distance calculation
                 import math
@@ -714,14 +700,11 @@ with tab7:
                     a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
                     return R * 2 * math.asin(math.sqrt(a))
 
-                nearby = df_raw.dropna(subset=["Latitude", "Longitude"]).copy()
-                nearby = nearby[nearby["Technology"].isin(nearby_tech)]
-                nearby = nearby[nearby["Status"].isin(nearby_status)]
+                nearby = df.dropna(subset=["Latitude", "Longitude"]).copy()
                 nearby["Distance (mi)"] = nearby.apply(
                     lambda r: haversine(lat, lon, r["Latitude"], r["Longitude"]), axis=1
                 )
                 nearby = nearby[nearby["Distance (mi)"] <= radius_miles]
-                # Exclude the reference plant itself
                 nearby = nearby[nearby["Plant Name"] != selected_plant]
                 nearby = nearby.sort_values("Distance (mi)")
 
