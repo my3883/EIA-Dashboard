@@ -233,7 +233,7 @@ def process_file(file_bytes):
         "Total_MWac": "Total MWac",
         "Total_MWdc": "Total MWdc",
         "Total_MWh": "Total MWh",
-        "Entity Name": "Owner",
+        "Entity Name": "EIA Entity",
         "Plant State": "State",
     })
     df = df.drop(columns=["Status_Simple"], errors="ignore")
@@ -347,12 +347,33 @@ def find_data_file():
     matches = glob.glob("*generator*.xlsx") + glob.glob("*Generator*.xlsx")
     return max(matches, key=os.path.getmtime) if matches else None
 
+@st.cache_data
+def load_ownership():
+    try:
+        owners = pd.read_excel("eia asset owners.xlsx")
+        # Normalize column names -- expect Plant Name, EIA Entity, Owner
+        owners.columns = owners.columns.str.strip()
+        if "Plant Name" in owners.columns and "Owner" in owners.columns:
+            return owners[["Plant Name", "Owner"]].drop_duplicates(subset=["Plant Name"])
+    except FileNotFoundError:
+        pass
+    return pd.DataFrame(columns=["Plant Name", "Owner"])
+
+def apply_ownership(df, owners):
+    if owners.empty:
+        df["Owner"] = None
+        return df
+    df = df.merge(owners, on="Plant Name", how="left")
+    return df
+
 data_file = find_data_file()
 data_loaded = False
 
 if data_file:
     with open(data_file, "rb") as f:
         df_raw = process_file(f.read())
+    owners_df = load_ownership()
+    df_raw = apply_ownership(df_raw, owners_df)
     data_loaded = True
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
@@ -363,6 +384,8 @@ with st.sidebar:
         uploaded = st.file_uploader("Upload EIA 860M Excel file", type=["xlsx"])
         if uploaded:
             df_raw = process_file(uploaded.read())
+            owners_df = load_ownership()
+            df_raw = apply_ownership(df_raw, owners_df)
             data_loaded = True
 
     if data_loaded:
@@ -479,20 +502,20 @@ with tab2:
 # ── Solar Projects ─────────────────────────────────────────────────────────────
 with tab3:
     st.title("Solar Project List")
-    d = solar_df[["Plant Name", "Owner", "State", "County", "Operating Year",
-                  "Status", "Total MWdc", "Total MWac"]].copy()
-    d = d[[c for c in d.columns if c in solar_df.columns]]
-    d = d.sort_values("Total MWac", ascending=False).reset_index(drop=True)
+    cols = ["Plant Name", "Owner", "EIA Entity", "State", "County", "Operating Year",
+            "Status", "Total MWdc", "Total MWac"]
+    cols = [c for c in cols if c in solar_df.columns]
+    d = solar_df[cols].sort_values("Total MWac", ascending=False).reset_index(drop=True)
     st.markdown(f"**{len(d):,} projects** | **{to_gw(d['Total MWac'])} GWac**")
     st.dataframe(d, use_container_width=True, height=650)
 
 # ── BESS Projects ──────────────────────────────────────────────────────────────
 with tab4:
     st.title("BESS Project List")
-    d = bess_df[["Plant Name", "Owner", "State", "County", "Operating Year",
-                 "Status", "Total MWh", "Total MWac"]].copy()
-    d = d[[c for c in d.columns if c in bess_df.columns]]
-    d = d.sort_values("Total MWac", ascending=False).reset_index(drop=True)
+    cols = ["Plant Name", "Owner", "EIA Entity", "State", "County", "Operating Year",
+            "Status", "Total MWh", "Total MWac"]
+    cols = [c for c in cols if c in bess_df.columns]
+    d = bess_df[cols].sort_values("Total MWac", ascending=False).reset_index(drop=True)
     st.markdown(f"**{len(d):,} projects** | **{to_gw(d['Total MWac'])} GWac**")
     st.dataframe(d, use_container_width=True, height=650)
 
@@ -515,7 +538,7 @@ with tab6:
     st.markdown(f"**{len(veg):,} utility-scale solar sites** in the Midwest with Est. Acres > 1,000")
     st.markdown("<br>", unsafe_allow_html=True)
 
-    table_cols = ["Plant Name", "Owner", "State", "County",
+    table_cols = ["Plant Name", "Owner", "EIA Entity", "State", "County",
                   "Est. Acres", "Total MWac", "Operating Year", "Status"]
     table_cols = [c for c in table_cols if c in veg.columns]
     veg_display = veg[table_cols].sort_values("Est. Acres", ascending=False).reset_index(drop=True)
@@ -568,7 +591,7 @@ with tab7:
         if search_name:
             mask = mask & df_raw["Plant Name"].str.contains(search_name, case=False, na=False)
         if search_owner:
-            mask = mask & df_raw["Owner"].str.contains(search_owner, case=False, na=False)
+            mask = mask & df_raw["Owner"].fillna("").str.contains(search_owner, case=False, na=False)
         results = df_raw[mask].copy()
 
         if len(results) == 0:
@@ -577,7 +600,7 @@ with tab7:
             # Owner-only search: show a summary table first
             if search_owner and not search_name:
                 st.markdown(f"**{len(results):,} plants found for owner matching '{search_owner}'**")
-                owner_cols = ["Plant Name", "Owner", "State", "County", "Technology",
+                owner_cols = ["Plant Name", "Owner", "EIA Entity", "State", "County", "Technology",
                               "Segment", "Status", "Operating Year", "Total MWac", "Total MWh"]
                 owner_cols = [c for c in owner_cols if c in results.columns]
                 st.dataframe(
@@ -613,6 +636,7 @@ with tab7:
                 details_html = '<div class="detail-card">'
                 details_html += detail_row("Plant Name", row.get("Plant Name", ""))
                 details_html += detail_row("Owner", row.get("Owner", ""))
+                details_html += detail_row("EIA Entity", row.get("EIA Entity", ""))
                 details_html += detail_row("State", row.get("State", ""))
                 details_html += detail_row("County", row.get("County", ""))
                 details_html += detail_row("Technology", row.get("Technology", ""))
