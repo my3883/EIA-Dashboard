@@ -678,5 +678,108 @@ with tab7:
                     st.components.v1.iframe(google_maps_url, height=500)
                 else:
                     st.info("No coordinates available for this plant.")
+
+            # ── Nearby Projects ────────────────────────────────────────────────
+            if pd.notna(lat) and pd.notna(lon):
+                st.markdown("---")
+                st.markdown("### Nearby Projects")
+
+                nearby_col1, nearby_col2, nearby_col3 = st.columns([1, 1, 2])
+                with nearby_col1:
+                    radius_miles = st.number_input(
+                        "Search radius (miles)", min_value=1, max_value=500,
+                        value=50, step=5
+                    )
+                with nearby_col2:
+                    nearby_tech = st.multiselect(
+                        "Technology", ["Solar Photovoltaic", "Batteries"],
+                        default=["Solar Photovoltaic", "Batteries"],
+                        key="nearby_tech"
+                    )
+                with nearby_col3:
+                    nearby_status = st.multiselect(
+                        "Status", ["Operating", "Development"],
+                        default=["Operating", "Development"],
+                        key="nearby_status"
+                    )
+
+                # Haversine distance calculation
+                import math
+
+                def haversine(lat1, lon1, lat2, lon2):
+                    R = 3958.8  # Earth radius in miles
+                    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+                    dlat = lat2 - lat1
+                    dlon = lon2 - lon1
+                    a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
+                    return R * 2 * math.asin(math.sqrt(a))
+
+                nearby = df_raw.dropna(subset=["Latitude", "Longitude"]).copy()
+                nearby = nearby[nearby["Technology"].isin(nearby_tech)]
+                nearby = nearby[nearby["Status"].isin(nearby_status)]
+                nearby["Distance (mi)"] = nearby.apply(
+                    lambda r: haversine(lat, lon, r["Latitude"], r["Longitude"]), axis=1
+                )
+                nearby = nearby[nearby["Distance (mi)"] <= radius_miles]
+                # Exclude the reference plant itself
+                nearby = nearby[nearby["Plant Name"] != selected_plant]
+                nearby = nearby.sort_values("Distance (mi)")
+
+                st.markdown(f"**{len(nearby):,} projects within {radius_miles} miles**")
+
+                if len(nearby) > 0:
+                    # Table
+                    nearby_cols = ["Plant Name", "Owner", "State", "County", "Technology",
+                                   "Segment", "Status", "Operating Year", "Total MWac", "Distance (mi)"]
+                    nearby_cols = [c for c in nearby_cols if c in nearby.columns]
+                    nearby_display = nearby[nearby_cols].reset_index(drop=True)
+                    nearby_display["Distance (mi)"] = nearby_display["Distance (mi)"].round(1)
+                    st.dataframe(nearby_display, use_container_width=True, height=300)
+
+                    # Map showing reference site + nearby projects
+                    map_data = nearby[["Plant Name", "Latitude", "Longitude",
+                                       "Technology", "Status", "Total MWac"]].copy()
+                    map_data["Type"] = "Nearby"
+                    map_data["bubble_size"] = map_data["Total MWac"].clip(upper=2000) ** 0.5
+
+                    # Reference site marker
+                    ref_mwac = row.get("Total MWac", 100)
+                    ref_row = pd.DataFrame([{
+                        "Plant Name": selected_plant + " (Reference)",
+                        "Latitude": lat,
+                        "Longitude": lon,
+                        "Technology": row.get("Technology", "Solar Photovoltaic"),
+                        "Status": row.get("Status", "Operating"),
+                        "Total MWac": ref_mwac,
+                        "Type": "Reference",
+                        "bubble_size": max(float(ref_mwac if pd.notna(ref_mwac) else 100), 100) ** 0.5 * 1.5
+                    }])
+
+                    map_combined = pd.concat([ref_row, map_data], ignore_index=True)
+
+                    fig_nearby = px.scatter_mapbox(
+                        map_combined,
+                        lat="Latitude", lon="Longitude",
+                        size="bubble_size",
+                        color="Type",
+                        color_discrete_map={"Reference": AMBER, "Nearby": BLUE_DARK},
+                        hover_name="Plant Name",
+                        hover_data={"Technology": True, "Status": True,
+                                    "Total MWac": True, "Type": False,
+                                    "bubble_size": False, "Latitude": False, "Longitude": False},
+                        zoom=7,
+                        center={"lat": lat, "lon": lon},
+                        mapbox_style="open-street-map",
+                        height=500
+                    )
+                    fig_nearby.update_layout(
+                        margin=dict(t=0, b=0, l=0, r=0),
+                        legend=dict(orientation="h", yanchor="bottom", y=1.01,
+                                    xanchor="left", x=0,
+                                    font=dict(family="Inter, sans-serif"))
+                    )
+                    st.plotly_chart(fig_nearby, use_container_width=True)
+                else:
+                    st.info(f"No other projects found within {radius_miles} miles.")
     else:
         st.markdown("Enter a plant name or owner above to search. Partial matches are supported.")
