@@ -438,8 +438,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "BESS Projects",
     "Project Map",
     "Vegetation",
-    "Search",
-    "Owner"
+    "Search by Project",
+    "Search by Owner"
 ])
 
 # ── Solar Market ───────────────────────────────────────────────────────────────
@@ -582,7 +582,7 @@ with tab6:
 
 # ── Search ─────────────────────────────────────────────────────────────────────
 with tab7:
-    st.title("Plant Search")
+    st.title("Search by Project")
 
     col_s1, col_s2 = st.columns(2)
     with col_s1:
@@ -771,7 +771,7 @@ with tab7:
 
 # ── Owner ──────────────────────────────────────────────────────────────────────
 with tab8:
-    st.title("Owner Search")
+    st.title("Search by Owner")
 
     # Only useful if ownership data is populated
     if df["Owner"].isna().all():
