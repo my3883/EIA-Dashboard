@@ -586,7 +586,7 @@ with tab7:
 
     col_s1, col_s2 = st.columns(2)
     with col_s1:
-        search_name = st.text_input("Search by plant name", placeholder="e.g. Desert Sunlight, Gemini...")
+        search_name = st.text_input("Search by project name", placeholder="e.g. Desert Sunlight, Gemini...")
     with col_s2:
         search_owner = st.text_input("Search by owner", placeholder="e.g. NextEra, Invenergy...")
 
@@ -781,20 +781,22 @@ with tab8:
     owner_query = st.text_input("Search owner name", placeholder="e.g. NextEra, Invenergy, AES...")
 
     if owner_query:
-        owner_results = df[df["Owner"].str.contains(owner_query, case=False, na=False)].copy()
+        owner_matches = df[df["Owner"].str.contains(owner_query, case=False, na=False)].copy()
 
-        if len(owner_results) == 0:
+        if len(owner_matches) == 0:
             st.warning("No owners found matching that search.")
         else:
-            # If multiple distinct owners match show a selector
-            matched_owners = sorted(owner_results["Owner"].dropna().unique())
+            matched_owners = sorted(owner_matches["Owner"].dropna().unique())
             if len(matched_owners) > 1:
                 selected_owner = st.selectbox(
-                    f"{len(matched_owners)} owners found -- select one", matched_owners
+                    f"{len(matched_owners)} owners found -- select one", ["-- Select --"] + matched_owners
                 )
-                owner_results = owner_results[owner_results["Owner"] == selected_owner]
+                if selected_owner == "-- Select --":
+                    st.stop()
             else:
                 selected_owner = matched_owners[0]
+
+            owner_results = df[df["Owner"] == selected_owner].copy()
 
             st.markdown("<br>", unsafe_allow_html=True)
 
