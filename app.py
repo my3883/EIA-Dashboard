@@ -431,14 +431,15 @@ solar_df = df[df["Technology"] == "Solar Photovoltaic"].copy()
 bess_df = df[df["Technology"] == "Batteries"].copy()
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Solar Market",
     "BESS Market",
     "Solar Projects",
     "BESS Projects",
     "Project Map",
     "Vegetation",
-    "Search"
+    "Search",
+    "Owner"
 ])
 
 # ── Solar Market ───────────────────────────────────────────────────────────────
@@ -767,3 +768,138 @@ with tab7:
                     st.info(f"No other projects found within {radius_miles} miles.")
     else:
         st.markdown("Enter a plant name or owner above to search. Partial matches are supported.")
+
+# ── Owner ──────────────────────────────────────────────────────────────────────
+with tab8:
+    st.title("Owner Search")
+
+    # Only useful if ownership data is populated
+    if df["Owner"].isna().all():
+        st.info("No ownership data loaded yet. Add owners to your EIA Asset Owners.xlsx file in GitHub.")
+        st.stop()
+
+    owner_query = st.text_input("Search owner name", placeholder="e.g. NextEra, Invenergy, AES...")
+
+    if owner_query:
+        owner_results = df[df["Owner"].str.contains(owner_query, case=False, na=False)].copy()
+
+        if len(owner_results) == 0:
+            st.warning("No owners found matching that search.")
+        else:
+            # If multiple distinct owners match show a selector
+            matched_owners = sorted(owner_results["Owner"].dropna().unique())
+            if len(matched_owners) > 1:
+                selected_owner = st.selectbox(
+                    f"{len(matched_owners)} owners found -- select one", matched_owners
+                )
+                owner_results = owner_results[owner_results["Owner"] == selected_owner]
+            else:
+                selected_owner = matched_owners[0]
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # KPI row
+            solar_own = owner_results[owner_results["Technology"] == "Solar Photovoltaic"]
+            bess_own = owner_results[owner_results["Technology"] == "Batteries"]
+            op_own = owner_results[owner_results["Status"] == "Operating"]
+            dev_own = owner_results[owner_results["Status"] == "Development"]
+
+            c1, c2, c3, c4, c5 = st.columns(5)
+            metric_card(c1, "Total GWac", to_gw(owner_results["Total MWac"]), f"{len(owner_results):,} plants")
+            metric_card(c2, "Solar GWac", to_gw(solar_own["Total MWac"]), f"{len(solar_own):,} plants")
+            metric_card(c3, "BESS GWac", to_gw(bess_own["Total MWac"]), f"{len(bess_own):,} plants")
+            metric_card(c4, "Operating GWac", to_gw(op_own["Total MWac"]), f"{len(op_own):,} plants")
+            metric_card(c5, "Development GWac", to_gw(dev_own["Total MWac"]), f"{len(dev_own):,} plants")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Map
+            map_own = owner_results.dropna(subset=["Latitude", "Longitude"]).copy()
+            map_own = map_own[(map_own["Latitude"].between(24, 50)) & (map_own["Longitude"].between(-125, -66))]
+            map_own["bubble_size"] = map_own["Total MWac"].clip(upper=2000) ** 0.5
+
+            if len(map_own) > 0:
+                fig_own = px.scatter_mapbox(
+                    map_own,
+                    lat="Latitude", lon="Longitude",
+                    size="bubble_size",
+                    color="Technology",
+                    color_discrete_map={"Solar Photovoltaic": BLUE_DARK, "Batteries": AMBER},
+                    hover_name="Plant Name",
+                    hover_data={"State": True, "Status": True, "Total MWac": True,
+                                "Operating Year": True, "bubble_size": False,
+                                "Latitude": False, "Longitude": False},
+                    zoom=3.5,
+                    center={"lat": map_own["Latitude"].mean(), "lon": map_own["Longitude"].mean()},
+                    mapbox_style="open-street-map",
+                    height=450,
+                    custom_data=["Plant Name", "Latitude", "Longitude"]
+                )
+                fig_own.update_layout(
+                    margin=dict(t=0, b=0, l=0, r=0),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.01,
+                                xanchor="left", x=0,
+                                font=dict(family="Inter, sans-serif"))
+                )
+                st.plotly_chart(fig_own, use_container_width=True, key="owner_map")
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Table
+            table_cols = ["Plant Name", "Project Entity", "State", "County", "Technology",
+                          "Segment", "Status", "EIA Status", "Operating Year",
+                          "Total MWac", "Total MWdc", "Total MWh", "Est. Acres"]
+            table_cols = [c for c in table_cols if c in owner_results.columns]
+            owner_table = owner_results[table_cols].sort_values("Total MWac", ascending=False).reset_index(drop=True)
+            st.dataframe(owner_table, use_container_width=True, height=400)
+
+            # Site detail on selection
+            st.markdown("---")
+            st.markdown("### Site Detail")
+            site_names = sorted(owner_results["Plant Name"].dropna().unique())
+            selected_site = st.selectbox("Select a site to view satellite image", site_names)
+
+            if selected_site:
+                site_row = owner_results[owner_results["Plant Name"] == selected_site].iloc[0]
+                site_lat = site_row.get("Latitude")
+                site_lon = site_row.get("Longitude")
+
+                detail_col, map_col = st.columns([1, 1])
+
+                with detail_col:
+                    def detail_row_own(label, value):
+                        if pd.isna(value) or value == "" or value is None:
+                            value = "—"
+                        return f'<div class="detail-row"><span class="detail-label">{label}</span><span class="detail-value">{value}</span></div>'
+
+                    d_html = '<div class="detail-card">'
+                    d_html += detail_row_own("Plant Name", site_row.get("Plant Name", ""))
+                    d_html += detail_row_own("Owner", site_row.get("Owner", ""))
+                    d_html += detail_row_own("Project Entity", site_row.get("Project Entity", ""))
+                    d_html += detail_row_own("State", site_row.get("State", ""))
+                    d_html += detail_row_own("County", site_row.get("County", ""))
+                    d_html += detail_row_own("Technology", site_row.get("Technology", ""))
+                    d_html += detail_row_own("Segment", site_row.get("Segment", ""))
+                    d_html += detail_row_own("Status", site_row.get("Status", ""))
+                    d_html += detail_row_own("EIA Status", site_row.get("EIA Status", ""))
+                    d_html += detail_row_own("Operating Year", str(site_row.get("Operating Year", "")))
+                    mwac = site_row.get("Total MWac", 0)
+                    d_html += detail_row_own("Total MWac", f"{mwac:,.1f}" if pd.notna(mwac) else "—")
+                    mwdc = site_row.get("Total MWdc")
+                    d_html += detail_row_own("Total MWdc", f"{mwdc:,.1f}" if pd.notna(mwdc) and mwdc else "—")
+                    mwh = site_row.get("Total MWh")
+                    d_html += detail_row_own("Total MWh", f"{mwh:,.1f}" if pd.notna(mwh) and mwh else "—")
+                    acres = site_row.get("Est. Acres")
+                    d_html += detail_row_own("Est. Acres", f"{int(acres):,}" if pd.notna(acres) and acres else "—")
+                    d_html += '</div>'
+                    st.markdown(d_html, unsafe_allow_html=True)
+
+                with map_col:
+                    if pd.notna(site_lat) and pd.notna(site_lon):
+                        google_maps_url = f"https://maps.google.com/maps?q={site_lat},{site_lon}&z=14&output=embed&t=k"
+                        st.components.v1.iframe(google_maps_url, height=460)
+                    else:
+                        st.info("No coordinates available for this site.")
+    else:
+        st.markdown("Enter an owner name above to search. Partial matches are supported.")
+
