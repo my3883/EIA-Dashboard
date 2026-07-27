@@ -94,7 +94,7 @@ st.markdown("""
         border-color: #0074FF !important;
     }
     div[data-testid="stTabs"] [role="tablist"] {
-        gap: 4px;
+        gap: 28px;
         border-bottom: 2px solid #e5e7eb;
     }
     div[data-testid="stTabs"] button[role="tab"] {
@@ -497,16 +497,16 @@ solar_df = df[df["Technology"] == "Solar Photovoltaic"].copy()
 bess_df = df[df["Technology"] == "Batteries"].copy()
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab9, tab7, tab8 = st.tabs([
     "Solar Market",
     "BESS Market",
     "Solar Projects",
     "BESS Projects",
     "Project Map",
     "Vegetation",
+    "Wildfire Risk",
     "Search by Project",
-    "Search by Owner",
-    "Wildfire Risk"
+    "Search by Owner"
 ])
 
 # ── Solar Market ───────────────────────────────────────────────────────────────
@@ -1042,35 +1042,37 @@ with tab9:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    map_sites = risk_sites.dropna(subset=["Latitude", "Longitude"]).copy()
+    map_sites = risk_sites[risk_sites["At Risk"]].dropna(subset=["Latitude", "Longitude"]).copy()
     map_sites = map_sites[(map_sites["Latitude"].between(24, 50)) & (map_sites["Longitude"].between(-125, -66))]
-    map_sites["Risk Status"] = map_sites["At Risk"].map({True: "At Risk", False: "Clear"})
     map_sites["bubble_size"] = map_sites["Total MWac"].clip(upper=2000) ** 0.5
 
-    fig_wf = px.scatter_mapbox(
-        map_sites, lat="Latitude", lon="Longitude",
-        size="bubble_size", color="Risk Status",
-        color_discrete_map={"At Risk": "#DC2626", "Clear": BLUE_DARK},
-        hover_name="Plant Name",
-        hover_data={"State": True, "Total MWac": True, "Nearest Fire (mi)": True,
-                    "bubble_size": False, "Latitude": False, "Longitude": False},
-        zoom=3.5, center={"lat": 38.5, "lon": -96},
-        mapbox_style="open-street-map", height=600
-    )
-    if not fires.empty:
-        fig_wf.add_scattermapbox(
-            lat=fires["latitude"], lon=fires["longitude"],
-            mode="markers",
-            marker=dict(size=6, color="#FF8C00", opacity=0.6),
-            name="Fire Detection",
-            hoverinfo="skip"
+    if map_sites.empty:
+        st.info("No at-risk sites to show on the map at this radius and confidence level.")
+    else:
+        fig_wf = px.scatter_mapbox(
+            map_sites, lat="Latitude", lon="Longitude",
+            size="bubble_size", color_discrete_sequence=["#DC2626"],
+            hover_name="Plant Name",
+            hover_data={"State": True, "Total MWac": True, "Nearest Fire (mi)": True,
+                        "bubble_size": False, "Latitude": False, "Longitude": False},
+            zoom=3.5, center={"lat": 38.5, "lon": -96},
+            mapbox_style="open-street-map", height=600
         )
-    fig_wf.update_layout(
-        margin=dict(t=0, b=0, l=0, r=0),
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
-                    font=dict(family="Inter, sans-serif"))
-    )
-    st.plotly_chart(fig_wf, use_container_width=True)
+        fig_wf.update_traces(name="At Risk Site", showlegend=True)
+        if not fires.empty:
+            fig_wf.add_scattermapbox(
+                lat=fires["latitude"], lon=fires["longitude"],
+                mode="markers",
+                marker=dict(size=6, color="#FF8C00", opacity=0.6),
+                name="Fire Detection",
+                hoverinfo="skip"
+            )
+        fig_wf.update_layout(
+            margin=dict(t=0, b=0, l=0, r=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
+                        font=dict(family="Inter, sans-serif"))
+        )
+        st.plotly_chart(fig_wf, use_container_width=True)
 
     st.caption(
         "Fire detections are satellite thermal anomalies (NASA FIRMS, VIIRS/MODIS), filtered to "
