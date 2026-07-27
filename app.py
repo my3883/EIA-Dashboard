@@ -359,6 +359,25 @@ def get_firms_data(map_key, source, day_range):
         return pd.DataFrame(), f"Could not reach FIRMS: {e}"
 
 
+def filter_fire_confidence(fires_df, source, min_confidence):
+    """Drop low-confidence detections (ag burns, industrial heat, glint) before risk scoring."""
+    if fires_df is None or fires_df.empty or "confidence" not in fires_df.columns:
+        return fires_df
+
+    f = fires_df.copy()
+    if source.startswith("VIIRS"):
+        # VIIRS confidence is categorical: l (low), n (nominal), h (high)
+        keep_map = {"High only": ["h"], "Nominal & High": ["n", "h"], "All (incl. low)": ["l", "n", "h"]}
+        keep = keep_map.get(min_confidence, ["n", "h"])
+        f = f[f["confidence"].isin(keep)]
+    else:
+        # MODIS confidence is numeric 0-100
+        threshold_map = {"High only": 80, "Nominal & High": 50, "All (incl. low)": 0}
+        threshold = threshold_map.get(min_confidence, 50)
+        f = f[pd.to_numeric(f["confidence"], errors="coerce") >= threshold]
+    return f
+
+
 def compute_wildfire_risk(sites_df, fires_df, radius_miles):
     sites = sites_df.dropna(subset=["Latitude", "Longitude"]).copy()
     if fires_df is None or fires_df.empty or sites.empty:
@@ -974,7 +993,7 @@ with tab9:
         st.info("Enter a FIRMS MAP_KEY above to load fire data.")
         st.stop()
 
-    col_a, col_b, col_c = st.columns(3)
+    col_a, col_b, col_c, col_d = st.columns(4)
     with col_a:
         fire_source = st.selectbox(
             "Satellite source", ["VIIRS_SNPP_NRT", "VIIRS_NOAA20_NRT", "VIIRS_NOAA21_NRT", "MODIS_NRT"],
@@ -984,11 +1003,19 @@ with tab9:
         day_range = st.slider("Days of fire detections", 1, 7, 2)
     with col_c:
         radius_miles = st.slider("Risk radius (miles)", 5, 100, 25)
+    with col_d:
+        min_confidence = st.selectbox(
+            "Minimum confidence", ["Nominal & High", "High only", "All (incl. low)"],
+            index=0, help="Low-confidence detections often include agricultural burns, industrial heat, and other false positives rather than genuine wildfires."
+        )
 
     fires, fire_err = get_firms_data(firms_key, fire_source, day_range)
     if fire_err:
         st.error(fire_err)
         st.stop()
+
+    fires_raw_count = len(fires)
+    fires = filter_fire_confidence(fires, fire_source, min_confidence)
 
     operating_sites = df[df["Status"] == "Operating"].copy()
     risk_sites = compute_wildfire_risk(operating_sites, fires, radius_miles)
@@ -997,7 +1024,7 @@ with tab9:
     c1, c2, c3 = st.columns(3)
     metric_card(c1, "Sites at Risk", f"{len(at_risk):,}", f"within {radius_miles} mi of active fire")
     metric_card(c2, "GWac at Risk", to_gw(at_risk["Total MWac"]), f"{len(at_risk):,} operating sites")
-    metric_card(c3, "Active Detections", f"{len(fires):,}", f"last {day_range} day(s), CONUS")
+    metric_card(c3, "Active Detections", f"{len(fires):,}", f"of {fires_raw_count:,} raw, last {day_range} day(s)")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -1046,8 +1073,9 @@ with tab9:
     st.plotly_chart(fig_wf, use_container_width=True)
 
     st.caption(
-        "Fire detections are satellite thermal anomalies (NASA FIRMS, VIIRS/MODIS). "
-        "Cloud cover and small or slow-moving fires can go undetected, so treat this as "
+        "Fire detections are satellite thermal anomalies (NASA FIRMS, VIIRS/MODIS), filtered to "
+        f"'{min_confidence}' confidence to reduce agricultural burns and other false positives. "
+        "Cloud cover and small or slow-moving fires can still go undetected, so treat this as "
         "a screening layer, not a confirmed threat assessment."
     )
 
