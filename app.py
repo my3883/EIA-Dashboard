@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 import glob
 import os
@@ -342,6 +343,52 @@ def make_map(df_map, height=680, center_lat=38.5, center_lon=-96, zoom=3.5):
     return fig
 
 
+# ── Wildfire data (NASA FIRMS) ──────────────────────────────────────────────────
+FIRMS_BBOX = "-125,24,-66,50"  # CONUS: west,south,east,north
+
+@st.cache_data(ttl=3600, show_spinner="Fetching active fire detections...")
+def get_firms_data(map_key, source, day_range):
+    url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{map_key}/{source}/{FIRMS_BBOX}/{day_range}"
+    try:
+        fires = pd.read_csv(url)
+        if "latitude" not in fires.columns:
+            # FIRMS returns an error message as a single-column CSV on bad key/params
+            return pd.DataFrame(), "FIRMS returned no data. Check that your MAP_KEY is valid."
+        return fires, None
+    except Exception as e:
+        return pd.DataFrame(), f"Could not reach FIRMS: {e}"
+
+
+def compute_wildfire_risk(sites_df, fires_df, radius_miles):
+    sites = sites_df.dropna(subset=["Latitude", "Longitude"]).copy()
+    if fires_df is None or fires_df.empty or sites.empty:
+        sites["Nearest Fire (mi)"] = None
+        sites["At Risk"] = False
+        return sites
+
+    from scipy.spatial import cKDTree
+
+    mean_lat = sites["Latitude"].mean()
+    mi_per_deg_lat = 69.0
+    mi_per_deg_lon = 69.0 * np.cos(np.radians(mean_lat))
+
+    fire_xy = np.column_stack([
+        fires_df["longitude"].values * mi_per_deg_lon,
+        fires_df["latitude"].values * mi_per_deg_lat,
+    ])
+    site_xy = np.column_stack([
+        sites["Longitude"].values * mi_per_deg_lon,
+        sites["Latitude"].values * mi_per_deg_lat,
+    ])
+
+    tree = cKDTree(fire_xy)
+    dist, _ = tree.query(site_xy, k=1)
+
+    sites["Nearest Fire (mi)"] = dist.round(1)
+    sites["At Risk"] = sites["Nearest Fire (mi)"] <= radius_miles
+    return sites
+
+
 # ── Find data file ─────────────────────────────────────────────────────────────
 def find_data_file():
     matches = glob.glob("*generator*.xlsx") + glob.glob("*Generator*.xlsx")
@@ -431,7 +478,7 @@ solar_df = df[df["Technology"] == "Solar Photovoltaic"].copy()
 bess_df = df[df["Technology"] == "Batteries"].copy()
 
 # ── Tabs ───────────────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "Solar Market",
     "BESS Market",
     "Solar Projects",
@@ -439,7 +486,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "Project Map",
     "Vegetation",
     "Search by Project",
-    "Search by Owner"
+    "Search by Owner",
+    "Wildfire Risk"
 ])
 
 # ── Solar Market ───────────────────────────────────────────────────────────────
@@ -904,4 +952,102 @@ with tab8:
                         st.info("No coordinates available for this site.")
     else:
         st.markdown("Enter an owner name above to search. Partial matches are supported.")
+
+# ── Wildfire Risk ────────────────────────────────────────────────────────────
+with tab9:
+    st.title("Wildfire Risk")
+    st.markdown(
+        "Cross-references your operating sites against near-real-time active fire "
+        "detections from NASA FIRMS (satellite thermal anomaly data)."
+    )
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    firms_key = st.secrets.get("FIRMS_MAP_KEY", "") if hasattr(st, "secrets") else ""
+    if not firms_key:
+        firms_key = st.text_input(
+            "NASA FIRMS MAP_KEY", type="password",
+            help="Free, instant key at https://firms.modaps.eosdis.nasa.gov/api/map_key/. "
+                 "Add it to Streamlit secrets as FIRMS_MAP_KEY to skip this box."
+        )
+
+    if not firms_key:
+        st.info("Enter a FIRMS MAP_KEY above to load fire data.")
+        st.stop()
+
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        fire_source = st.selectbox(
+            "Satellite source", ["VIIRS_SNPP_NRT", "VIIRS_NOAA20_NRT", "VIIRS_NOAA21_NRT", "MODIS_NRT"],
+            index=0, help="VIIRS detects smaller fires at 375m resolution; MODIS is coarser but has a longer track record."
+        )
+    with col_b:
+        day_range = st.slider("Days of fire detections", 1, 7, 2)
+    with col_c:
+        radius_miles = st.slider("Risk radius (miles)", 5, 100, 25)
+
+    fires, fire_err = get_firms_data(firms_key, fire_source, day_range)
+    if fire_err:
+        st.error(fire_err)
+        st.stop()
+
+    operating_sites = df[df["Status"] == "Operating"].copy()
+    risk_sites = compute_wildfire_risk(operating_sites, fires, radius_miles)
+    at_risk = risk_sites[risk_sites["At Risk"]]
+
+    c1, c2, c3 = st.columns(3)
+    metric_card(c1, "Sites at Risk", f"{len(at_risk):,}", f"within {radius_miles} mi of active fire")
+    metric_card(c2, "GWac at Risk", to_gw(at_risk["Total MWac"]), f"{len(at_risk):,} operating sites")
+    metric_card(c3, "Active Detections", f"{len(fires):,}", f"last {day_range} day(s), CONUS")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    if len(at_risk) > 0:
+        st.markdown("### Sites Within Risk Radius")
+        table_cols = ["Plant Name", "Owner", "Project Entity", "State", "County",
+                      "Technology", "Total MWac", "Nearest Fire (mi)"]
+        table_cols = [c for c in table_cols if c in at_risk.columns]
+        st.dataframe(
+            at_risk[table_cols].sort_values("Nearest Fire (mi)").reset_index(drop=True),
+            use_container_width=True, height=350
+        )
+    else:
+        st.success(f"No operating sites within {radius_miles} miles of an active fire detection.")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    map_sites = risk_sites.dropna(subset=["Latitude", "Longitude"]).copy()
+    map_sites = map_sites[(map_sites["Latitude"].between(24, 50)) & (map_sites["Longitude"].between(-125, -66))]
+    map_sites["Risk Status"] = map_sites["At Risk"].map({True: "At Risk", False: "Clear"})
+    map_sites["bubble_size"] = map_sites["Total MWac"].clip(upper=2000) ** 0.5
+
+    fig_wf = px.scatter_mapbox(
+        map_sites, lat="Latitude", lon="Longitude",
+        size="bubble_size", color="Risk Status",
+        color_discrete_map={"At Risk": "#DC2626", "Clear": BLUE_DARK},
+        hover_name="Plant Name",
+        hover_data={"State": True, "Total MWac": True, "Nearest Fire (mi)": True,
+                    "bubble_size": False, "Latitude": False, "Longitude": False},
+        zoom=3.5, center={"lat": 38.5, "lon": -96},
+        mapbox_style="open-street-map", height=600
+    )
+    if not fires.empty:
+        fig_wf.add_scattermapbox(
+            lat=fires["latitude"], lon=fires["longitude"],
+            mode="markers",
+            marker=dict(size=6, color="#FF8C00", opacity=0.6),
+            name="Fire Detection",
+            hoverinfo="skip"
+        )
+    fig_wf.update_layout(
+        margin=dict(t=0, b=0, l=0, r=0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="left", x=0,
+                    font=dict(family="Inter, sans-serif"))
+    )
+    st.plotly_chart(fig_wf, use_container_width=True)
+
+    st.caption(
+        "Fire detections are satellite thermal anomalies (NASA FIRMS, VIIRS/MODIS). "
+        "Cloud cover and small or slow-moving fires can go undetected, so treat this as "
+        "a screening layer, not a confirmed threat assessment."
+    )
 
