@@ -324,7 +324,7 @@ def make_map(df_map, height=680, center_lat=38.5, center_lon=-96, zoom=3.5):
     m = df_map.dropna(subset=["Latitude", "Longitude", "Total MWac"]).copy()
     m = m[(m["Latitude"].between(24, 50)) & (m["Longitude"].between(-125, -66))]
     m["bubble_size"] = m["Total MWac"].clip(upper=2000) ** 0.5
-    fig = px.scatter_mapbox(
+    fig = px.scatter_map(
         m, lat="Latitude", lon="Longitude",
         size="bubble_size", color="Technology",
         color_discrete_map={"Solar Photovoltaic": BLUE_DARK, "Batteries": AMBER},
@@ -333,7 +333,7 @@ def make_map(df_map, height=680, center_lat=38.5, center_lon=-96, zoom=3.5):
                     "Total MWac": True, "Operating Year": True,
                     "bubble_size": False, "Latitude": False, "Longitude": False},
         zoom=zoom, center={"lat": center_lat, "lon": center_lon},
-        mapbox_style="open-street-map", height=height
+        map_style="open-street-map", height=height
     )
     fig.update_layout(
         margin=dict(t=0, b=0, l=0, r=0),
@@ -627,7 +627,7 @@ with tab6:
     veg_map["bubble_size"] = veg_map["Est. Acres"].clip(upper=10000) ** 0.5
 
     if len(veg_map) > 0:
-        fig_veg = px.scatter_mapbox(
+        fig_veg = px.scatter_map(
             veg_map, lat="Latitude", lon="Longitude",
             size="bubble_size", color="Status",
             color_discrete_map={"Operating": BLUE_DARK, "Development": AMBER},
@@ -636,7 +636,7 @@ with tab6:
                         "Est. Acres": True, "Total MWac": True, "Operating Year": True,
                         "bubble_size": False, "Latitude": False, "Longitude": False},
             zoom=4, center={"lat": 42, "lon": -93},
-            mapbox_style="open-street-map", height=500
+            map_style="open-street-map", height=500
         )
         fig_veg.update_layout(
             margin=dict(t=0, b=0, l=0, r=0),
@@ -809,7 +809,7 @@ with tab7:
 
                     map_combined = pd.concat([ref_row, map_data], ignore_index=True)
 
-                    fig_nearby = px.scatter_mapbox(
+                    fig_nearby = px.scatter_map(
                         map_combined,
                         lat="Latitude", lon="Longitude",
                         size="bubble_size",
@@ -821,7 +821,7 @@ with tab7:
                                     "bubble_size": False, "Latitude": False, "Longitude": False},
                         zoom=7,
                         center={"lat": lat, "lon": lon},
-                        mapbox_style="open-street-map",
+                        map_style="open-street-map",
                         height=500
                     )
                     fig_nearby.update_layout(
@@ -888,7 +888,7 @@ with tab8:
             map_own["bubble_size"] = map_own["Total MWac"].clip(upper=2000) ** 0.5
 
             if len(map_own) > 0:
-                fig_own = px.scatter_mapbox(
+                fig_own = px.scatter_map(
                     map_own,
                     lat="Latitude", lon="Longitude",
                     size="bubble_size",
@@ -900,7 +900,7 @@ with tab8:
                                 "Latitude": False, "Longitude": False},
                     zoom=3.5,
                     center={"lat": map_own["Latitude"].mean(), "lon": map_own["Longitude"].mean()},
-                    mapbox_style="open-street-map",
+                    map_style="open-street-map",
                     height=450,
                     custom_data=["Plant Name", "Latitude", "Longitude"]
                 )
@@ -1049,18 +1049,18 @@ with tab9:
     if map_sites.empty:
         st.info("No at-risk sites to show on the map at this radius and confidence level.")
     else:
-        fig_wf = px.scatter_mapbox(
+        fig_wf = px.scatter_map(
             map_sites, lat="Latitude", lon="Longitude",
             size="bubble_size", color_discrete_sequence=["#DC2626"],
             hover_name="Plant Name",
             hover_data={"State": True, "Total MWac": True, "Nearest Fire (mi)": True,
                         "bubble_size": False, "Latitude": False, "Longitude": False},
             zoom=3.5, center={"lat": 38.5, "lon": -96},
-            mapbox_style="open-street-map", height=600
+            map_style="open-street-map", height=600
         )
         fig_wf.update_traces(name="At Risk Site", showlegend=True)
         if not fires.empty:
-            fig_wf.add_scattermapbox(
+            fig_wf.add_scattermap(
                 lat=fires["latitude"], lon=fires["longitude"],
                 mode="markers",
                 marker=dict(size=6, color="#FF8C00", opacity=0.6),
